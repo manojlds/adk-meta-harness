@@ -1,0 +1,4 @@
+model: gemini-2.5-flash
+max_turns: 50
+stop_conditions:
+  - task_complete
