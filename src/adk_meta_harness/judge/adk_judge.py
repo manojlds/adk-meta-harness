@@ -1,21 +1,14 @@
-"""LLM judge for scoring unlabeled traces.
-
-When a task has no programmatic verifier, the LLM judge reads the agent's
-execution trace and produces a score. Following canvas-org/meta-agent's approach
-where judge-based search can outperform labeled search.
-"""
+"""ADK-based judge — an ADK agent that evaluates traces."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from adk_meta_harness.judge.base import JudgeResult
 
-JUDGE_SYSTEM_PROMPT = """\
+JUDGE_INSTRUCTION = """\
 You are an expert judge evaluating an AI agent's performance on a task.
 
-You will receive:
-1. The task instruction given to the agent.
-2. The agent's execution trace (tool calls, responses, errors).
-3. The expected outcome (if available).
+You will be given a task instruction and the agent's execution trace.
+Optionally, you may also receive the expected outcome.
 
 Rate the agent's performance on a scale of 0.0 to 1.0:
 - 1.0: Task fully completed correctly.
@@ -28,34 +21,32 @@ Consider:
 - Did the agent use tools correctly and efficiently?
 - Is the final output correct and complete?
 
-Respond in this exact format:
+You MUST respond in this exact format:
 SCORE: <float between 0.0 and 1.0>
 REASONING: <brief explanation of your score>
 """
 
 
-@dataclass
-class JudgeResult:
-    score: float
-    reasoning: str
-    model: str
-    task_name: str
+class ADKJudge:
+    """Score traces using an ADK agent.
 
-
-class LLMJudge:
-    """Score unlabeled agent traces using an LLM.
-
-    This is used when Harbor tasks don't have programmatic verifiers,
-    or as a supplement to binary pass/fail for richer signal.
+    This creates an ADK LlmAgent with the judge instruction and runs it
+    via the ADK Runner. The model is specified via litellm model strings
+    so any provider can be used (e.g. "gemini/gemini-2.5-flash",
+    "openai/gpt-4o", "anthropic/claude-sonnet-4-20250514").
     """
 
     def __init__(
         self,
-        model: str = "gemini-2.5-flash",
-        system_prompt: str = JUDGE_SYSTEM_PROMPT,
+        model: str = "gemini/gemini-2.5-flash",
+        instruction: str = JUDGE_INSTRUCTION,
     ):
         self.model = model
-        self.system_prompt = system_prompt
+        self.instruction = instruction
+
+    @property
+    def name(self) -> str:
+        return f"adk:{self.model}"
 
     async def judge_trace(
         self,
@@ -64,35 +55,40 @@ class LLMJudge:
         task_name: str = "",
         expected_outcome: str | None = None,
     ) -> JudgeResult:
-        """Judge a single trace.
-
-        Args:
-            task_instruction: The instruction given to the agent.
-            trace: The agent's execution trace.
-            task_name: Name/ID of the task.
-            expected_outcome: Optional description of expected outcome.
-
-        Returns:
-            JudgeResult with score and reasoning.
-        """
-        from google import genai
-
-        client = genai.Client()
+        from google.adk.agents import LlmAgent
+        from google.adk.runners import Runner
+        from google.adk.sessions import InMemorySessionService
 
         user_content = f"## Task Instruction\n{task_instruction}\n\n"
         if expected_outcome:
             user_content += f"## Expected Outcome\n{expected_outcome}\n\n"
         user_content += f"## Agent Trace\n{trace}"
 
-        response = await client.aio.models.generate_content(
+        agent = LlmAgent(
+            name="judge",
             model=self.model,
-            contents=user_content,
-            config=genai.types.GenerateContentConfig(
-                system_instruction=self.system_prompt,
-            ),
+            instruction=self.instruction,
+            tools=[],
         )
 
-        text = response.text
+        runner = Runner(
+            agent=agent,
+            session_service=InMemorySessionService(),
+            app_name="adk-meta-harness-judge",
+        )
+
+        response_parts = []
+        async for event in runner.run_async(
+            user_id="judge",
+            session_id=task_name or "default",
+            new_message={"parts": [{"text": user_content}]},
+        ):
+            if event.content and event.content.parts:
+                for part in event.content.parts:
+                    if part.text:
+                        response_parts.append(part.text)
+
+        text = "\n".join(response_parts)
         score = self._parse_score(text)
         reasoning = self._parse_reasoning(text)
 
@@ -101,22 +97,14 @@ class LLMJudge:
             reasoning=reasoning,
             model=self.model,
             task_name=task_name,
+            raw_output=text,
         )
 
     async def judge_traces(
         self,
-        traces: list[tuple[str, str, str]],  # (task_name, instruction, trace)
+        traces: list[tuple[str, str, str]],
         expected_outcomes: dict[str, str] | None = None,
     ) -> list[JudgeResult]:
-        """Judge multiple traces.
-
-        Args:
-            traces: List of (task_name, instruction, trace) tuples.
-            expected_outcomes: Optional mapping of task_name -> expected outcome.
-
-        Returns:
-            List of JudgeResult objects.
-        """
         expected_outcomes = expected_outcomes or {}
         results = []
         for task_name, instruction, trace in traces:
@@ -131,7 +119,6 @@ class LLMJudge:
 
     @staticmethod
     def _parse_score(text: str) -> float:
-        """Parse SCORE: X.X from judge output."""
         for line in text.split("\n"):
             line = line.strip()
             if line.upper().startswith("SCORE:"):
@@ -143,7 +130,6 @@ class LLMJudge:
 
     @staticmethod
     def _parse_reasoning(text: str) -> str:
-        """Parse REASONING: ... from judge output."""
         for line in text.split("\n"):
             line = line.strip()
             if line.upper().startswith("REASONING:"):
