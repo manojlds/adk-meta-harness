@@ -8,10 +8,15 @@ from adk_meta_harness.proposer.coding_agent_cli import CodingAgentCLIProposer
 
 
 class OpenCodeProposer(CodingAgentCLIProposer):
-    """Proposer using the OpenCode CLI."""
+    """Proposer using the OpenCode CLI.
+
+    Uses ``opencode run`` which is the non-interactive execution mode.
+    The ``run`` command accepts a message, processes it, and exits —
+    no TUI, no interactive session.
+    """
 
     def __init__(self, model: str | None = None):
-        cli_args = []
+        cli_args: list[str] = []
         if model:
             cli_args.extend(["--model", model])
         super().__init__(
@@ -20,11 +25,15 @@ class OpenCodeProposer(CodingAgentCLIProposer):
         )
 
     def build_command(self, candidate_dir: Path, instruction: str) -> list[str]:
-        return [
+        cmd = [
             self.cli_command,
+            "run",
             *self.cli_args,
-            "--non-interactive",
-            "-p",
-            instruction,
+            "--dir",
             str(candidate_dir),
+            "--format",
+            "json",
+            "--no-session",
         ]
+        cmd.append(instruction)
+        return cmd
