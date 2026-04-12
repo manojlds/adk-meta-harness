@@ -117,7 +117,7 @@ class CodingAgentCLIProposer:
             capture_output=True,
             text=True,
             env=env,
-            timeout=600,
+            timeout=1800,
         )
 
         # Snapshot after
