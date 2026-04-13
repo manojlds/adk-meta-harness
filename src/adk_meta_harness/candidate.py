@@ -80,6 +80,18 @@ class Candidate:
         return self.path / "traces"
 
     @property
+    def evaluation_dir(self) -> Path:
+        return self.path / "evaluation"
+
+    @property
+    def validation_dir(self) -> Path:
+        return self.path / "validation"
+
+    @property
+    def proposal_dir(self) -> Path:
+        return self.path / "proposal"
+
+    @property
     def meta_json(self) -> Path:
         return self.path / "meta.json"
 
@@ -156,6 +168,9 @@ def init_experience_dir(experience_dir: Path, initial_harness: Path) -> Candidat
         version=0,
         description="Initial baseline harness",
     )
+    # Create standard subdirectories in the candidate
+    for subdir in ("traces", "evaluation", "validation", "proposal"):
+        (candidate.path / subdir).mkdir(exist_ok=True)
     results_path = experience_dir / "results.tsv"
     if not results_path.exists():
         results_path.write_text(

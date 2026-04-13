@@ -1,14 +1,21 @@
 """Harbor ADK adapter — runs an ADK agent on Harbor tasks.
 
-Uses ADK's AgentLoader to properly discover and load agent apps,
-supporting all ADK patterns: agent.py, __init__.py, App instances,
-and YAML configs.
+Uses ADK's AgentLoader for agent discovery and ATIF for trace collection.
+Harbor reward files provide pass/fail scores.
+
+Trace pipeline:
+    ADK Agent (OTel spans) → OtelToAtifConverter → AtifTrajectory → trajectory.json
+    Harbor verifier → reward.txt/reward.json → HarborReward
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+
+from adk_meta_harness.trace.atif import AtifTrajectory
+from adk_meta_harness.trace.harbor_reward import HarborReward, parse_reward_dir
+from adk_meta_harness.trace.otel_to_atif import OtelToAtifConverter
 
 
 @dataclass
@@ -18,8 +25,63 @@ class EvalResult:
     task_name: str
     passed: bool
     score: float
-    trace: str
+    trajectory: AtifTrajectory | None = None
+    reward: HarborReward | None = None
     error: str | None = None
+
+    @property
+    def trace_summary(self) -> str:
+        """Human-readable trace summary for quick diagnosis."""
+        if not self.trajectory or not self.trajectory.steps:
+            return self.error or "No trace available"
+        steps = self.trajectory.steps
+        tool_calls = sum(len(s.tool_calls) for s in steps)
+        lines = [f"Task: {self.task_name}"]
+        lines.append(f"Steps: {len(steps)}, Tool calls: {tool_calls}")
+        if self.trajectory.final_metrics:
+            fm = self.trajectory.final_metrics
+            lines.append(
+                f"Tokens: {fm.total_prompt_tokens}+{fm.total_completion_tokens}, "
+                f"Cost: ${fm.total_cost_usd:.4f}"
+            )
+        for step in steps:
+            if step.message:
+                preview = step.message[:100]
+                lines.append(f"  [{step.source}] {preview}")
+            for tc in step.tool_calls:
+                lines.append(f"  [tool_call] {tc.function_name}")
+        return "\n".join(lines)
+
+
+@dataclass
+class EvalOutput:
+    """Complete output from evaluating a candidate on all tasks."""
+
+    search_results: list[EvalResult] = field(default_factory=list)
+    holdout_results: list[EvalResult] = field(default_factory=list)
+
+    @property
+    def search_score(self) -> float:
+        if not self.search_results:
+            return 0.0
+        return sum(1 for r in self.search_results if r.passed) / len(
+            self.search_results
+        )
+
+    @property
+    def holdout_score(self) -> float:
+        if not self.holdout_results:
+            return self.search_score
+        return sum(1 for r in self.holdout_results if r.passed) / len(
+            self.holdout_results
+        )
+
+    @property
+    def combined_score(self) -> float:
+        all_results = self.search_results + self.holdout_results
+        if not all_results:
+            return 0.0
+        return sum(1 for r in all_results if r.passed) / len(all_results)
 
 
 async def evaluate_candidate(
@@ -29,74 +91,79 @@ async def evaluate_candidate(
     timeout: int = 300,
     search_task_names: list[str] | None = None,
     holdout_task_names: list[str] | None = None,
-) -> tuple[list[EvalResult], list[EvalResult]]:
+    output_dir: Path | None = None,
+) -> EvalOutput:
     """Evaluate a candidate harness on search and holdout tasks.
 
     Args:
         candidate_dir: Path to the candidate harness directory.
-            This directory is treated as an ADK agents_dir parent.
-            The candidate itself is a subdirectory containing agent.py
-            or other ADK entry points.
         tasks_dir: Path to Harbor task definitions.
         model: Model to use for the ADK agent.
         timeout: Timeout per task in seconds.
         search_task_names: Task names for the search set.
         holdout_task_names: Task names for the holdout set.
+        output_dir: Directory to write trajectory.json and reward files.
+            Defaults to candidate_dir / "evaluation".
 
     Returns:
-        Tuple of (search_results, holdout_results).
+        EvalOutput with search and holdout results.
     """
-    search_results = []
-    holdout_results = []
+    output_dir = output_dir or candidate_dir / "evaluation"
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     agent, app = _load_adk_agent(candidate_dir, model)
+    converter = OtelToAtifConverter()
 
     all_tasks = _discover_tasks(tasks_dir)
     search_set = search_task_names or [t for t in all_tasks]
     holdout_set = holdout_task_names or []
+
+    output = EvalOutput()
 
     for task_name in all_tasks:
         task_path = tasks_dir / task_name
         if not task_path.exists():
             continue
         instruction = _read_instruction(task_path)
+
         result = await _run_agent_on_task(
             agent=agent,
             app=app,
+            converter=converter,
             instruction=instruction,
             task_name=task_name,
             timeout=timeout,
+            model=model,
         )
 
-        if task_name in search_set:
-            search_results.append(result)
-        if task_name in holdout_set:
-            holdout_results.append(result)
-        elif not holdout_set:
-            search_results.append(result)
+        # Check Harbor reward files
+        task_logs_dir = output_dir / task_name
+        reward = parse_reward_dir(task_logs_dir)
+        if reward.score > 0 or reward.passed:
+            result.reward = reward
+            result.score = reward.score
+            result.passed = reward.passed
 
-    return search_results, holdout_results
+        # Write trajectory to disk
+        if result.trajectory:
+            traj_path = task_logs_dir / "trajectory.json"
+            result.trajectory.to_json_file(traj_path)
+
+        if task_name in search_set:
+            output.search_results.append(result)
+        if task_name in holdout_set:
+            output.holdout_results.append(result)
+        elif not holdout_set:
+            output.search_results.append(result)
+
+    return output
 
 
 def _load_adk_agent(
     candidate_dir: Path,
     model: str = "gemini-2.5-flash",
 ) -> tuple:
-    """Load the ADK agent using the official AgentLoader.
-
-    Handles all ADK patterns:
-    - agent.py with root_agent attribute
-    - agent.py with app attribute (App instance)
-    - __init__.py with root_agent or app
-    - root_agent.yaml config
-
-    If the loaded agent doesn't specify a model, the provided
-    model parameter is used as a default.
-
-    Returns:
-        Tuple of (root_agent, app) where app may be None if
-        only a bare BaseAgent was found.
-    """
+    """Load the ADK agent using the official AgentLoader."""
     from google.adk.agents.base_agent import BaseAgent
     from google.adk.apps.app import App
     from google.adk.cli.utils.agent_loader import AgentLoader
@@ -151,14 +218,16 @@ def _read_instruction(task_path: Path) -> str:
 async def _run_agent_on_task(
     agent,
     app,
+    converter: OtelToAtifConverter,
     instruction: str,
     task_name: str,
     timeout: int,
+    model: str = "gemini-2.5-flash",
 ) -> EvalResult:
-    """Run an ADK agent on a single task and collect the result.
+    """Run an ADK agent on a single task and collect ATIF trajectory.
 
-    Uses the App-wrapped Runner for full ADK lifecycle support
-    including plugins, context caching, and resumability.
+    Captures the full event stream and converts to ATIF format.
+    Falls back to Harbor reward files for scoring.
     """
     try:
         from google.adk.runners import Runner
@@ -171,32 +240,27 @@ async def _run_agent_on_task(
         )
 
         content = {"parts": [{"text": instruction}]}
-        trace_parts = []
+        events = []
 
         async for event in runner.run_async(
             user_id="meta-harness",
             session_id=task_name,
             new_message=content,
         ):
-            if event.content and event.content.parts:
-                for part in event.content.parts:
-                    if part.text:
-                        trace_parts.append(part.text)
-                    elif part.function_call:
-                        trace_parts.append(
-                            f"[tool_call: {part.function_call.name}]"
-                        )
-                    elif part.function_response:
-                        trace_parts.append(
-                            f"[tool_response: {part.function_response.name}]"
-                        )
+            events.append(event)
 
-        trace = "\n".join(trace_parts)
+        # Convert ADK events to ATIF trajectory
+        trajectory = converter.adk_events_to_atif(
+            events,
+            agent_name=getattr(agent, "name", "adk-agent"),
+            model_name=model,
+        )
+
         return EvalResult(
             task_name=task_name,
             passed=False,
             score=0.0,
-            trace=trace,
+            trajectory=trajectory,
         )
 
     except Exception as e:
@@ -204,6 +268,6 @@ async def _run_agent_on_task(
             task_name=task_name,
             passed=False,
             score=0.0,
-            trace="",
+            trajectory=None,
             error=str(e),
         )

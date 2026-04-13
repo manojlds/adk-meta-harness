@@ -22,6 +22,7 @@ dependencies = [
     { name = "adk-tool-search" },
     { name = "google-adk" },
     { name = "harbor" },
+    { name = "litellm" },
     { name = "pyyaml" },
     { name = "rich" },
 ]
@@ -40,6 +41,7 @@ requires-dist = [
     { name = "adk-tool-search", specifier = ">=0.1.0" },
     { name = "google-adk", specifier = ">=1.0.0" },
     { name = "harbor", specifier = ">=0.3.0" },
+    { name = "litellm", specifier = ">=1.0" },
     { name = "pyright", marker = "extra == 'dev'", specifier = ">=1.1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24" },
