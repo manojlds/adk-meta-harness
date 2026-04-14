@@ -1,5 +1,8 @@
 """ADK agent harness with adk-tool-search for dynamic tool discovery."""
 
+import yaml
+from pathlib import Path
+
 from google.adk.agents import LlmAgent
 from adk_tool_search import (
     ToolRegistry,
@@ -9,17 +12,26 @@ from adk_tool_search import (
 
 
 def create_agent(
-    model: str = "gemini-2.5-flash",
+    model: str | None = None,
     registry: ToolRegistry | None = None,
 ) -> LlmAgent:
-    """Create an ADK agent with dynamic tool search."""
+    """Create an ADK agent with dynamic tool search.
+
+    Model precedence: model parameter > config.yaml > default.
+    """
+    if model is None:
+        config_path = Path(__file__).parent / "config.yaml"
+        if config_path.exists():
+            config = yaml.safe_load(config_path.read_text()) or {}
+            model = config.get("model", "gemini-2.5-flash")
+
     if registry is None:
         registry = ToolRegistry()
 
     search_tool, load_tool = create_search_and_load_tools(registry)
     before_cb, after_cb = create_session_scoped_loader_callbacks(registry)
 
-    agent = LlmAgent(
+    return LlmAgent(
         name="tool-search-agent",
         model=model,
         instruction=(
@@ -30,7 +42,6 @@ def create_agent(
         before_model_callback=before_cb,
         after_tool_callback=after_cb,
     )
-    return agent
 
 
 agent = create_agent()
