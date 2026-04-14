@@ -1,0 +1,5 @@
+model: gemini-2.5-pro
+max_turns: 100
+stop_conditions:
+  - task_complete
+allow_model_changes: false
