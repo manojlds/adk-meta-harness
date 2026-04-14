@@ -14,6 +14,7 @@ from __future__ import annotations
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from adk_meta_harness.candidate import (
     Candidate,
@@ -26,6 +27,9 @@ from adk_meta_harness.harbor_adapter import evaluate_candidate
 from adk_meta_harness.learnings import Learnings
 from adk_meta_harness.proposer import get_proposer
 
+if TYPE_CHECKING:
+    from adk_meta_harness.judge.base import JudgeProtocol
+
 
 @dataclass
 class OptimizeConfig:
@@ -37,7 +41,7 @@ class OptimizeConfig:
     iterations: int = 10
     holdout_ratio: float = 0.3
     candidates_dir: Path | None = None
-    judge_model: str | None = None
+    judge: JudgeProtocol | None = None
     timeout: int = 300
 
 
@@ -76,6 +80,7 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
         tasks_dir=config.dataset,
         model=config.model,
         timeout=config.timeout,
+        judge=config.judge,
     )
 
     baseline_score = _compute_score(search_results, holdout_results)
@@ -144,6 +149,7 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
             tasks_dir=config.dataset,
             model=config.model,
             timeout=config.timeout,
+            judge=config.judge,
         )
 
         proposed_score = _compute_score(search_results, holdout_results)

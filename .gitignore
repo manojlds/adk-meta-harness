@@ -9,6 +9,6 @@ build/
 .ruff_cache/
 .pytest_cache/
 .mypy_cache/
-experience/
+candidates/
 *.log
 .env

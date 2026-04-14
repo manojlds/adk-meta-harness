@@ -74,6 +74,16 @@ def main() -> None:
         help="Directory to store candidates, traces, and learnings",
     )
     opt.add_argument(
+        "--judge",
+        default="litellm",
+        help="Judge backend: litellm, adk, opencode, pi, or a custom CLI command (default: litellm)",
+    )
+    opt.add_argument(
+        "--judge-model",
+        default=None,
+        help="Model for the judge (e.g. openai/glm-5). Defaults depend on the judge backend.",
+    )
+    opt.add_argument(
         "--timeout",
         type=int,
         default=300,
@@ -95,6 +105,16 @@ def main() -> None:
         help="Path to Harbor task/dataset directory",
     )
     ev.add_argument(
+        "--judge",
+        default="litellm",
+        help="Judge backend: litellm, adk, opencode, pi, or a custom CLI command (default: litellm)",
+    )
+    ev.add_argument(
+        "--judge-model",
+        default=None,
+        help="Model for the judge (e.g. openai/glm-5). Defaults depend on the judge backend.",
+    )
+    ev.add_argument(
         "--model",
         default=None,
         help=(
@@ -114,6 +134,9 @@ def main() -> None:
 
     if args.command == "optimize":
         from adk_meta_harness.outer_loop import OptimizeConfig, optimize
+        from adk_meta_harness.judge import get_judge
+
+        judge = get_judge(args.judge, model=args.judge_model)
 
         config = OptimizeConfig(
             dataset=args.dataset,
@@ -125,6 +148,7 @@ def main() -> None:
             holdout_ratio=args.holdout_ratio,
             candidates_dir=args.candidates_dir,
             timeout=args.timeout,
+            judge=judge,
         )
         result = asyncio.run(optimize(config))
         print("\nOptimization complete!")
@@ -135,6 +159,9 @@ def main() -> None:
 
     elif args.command == "eval":
         from adk_meta_harness.harbor_adapter import evaluate_candidate
+        from adk_meta_harness.judge import get_judge
+
+        judge = get_judge(args.judge, model=args.judge_model)
 
         search, holdout = asyncio.run(
             evaluate_candidate(
@@ -142,6 +169,7 @@ def main() -> None:
                 tasks_dir=args.dataset,
                 model=args.model,
                 timeout=args.timeout,
+                judge=judge,
             )
         )
         all_results = search + holdout

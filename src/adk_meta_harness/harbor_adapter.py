@@ -1,7 +1,8 @@
 """Harbor ADK adapter — runs an ADK agent on Harbor tasks.
 
 Uses ADK's AgentLoader for agent discovery and ATIF for trace collection.
-Harbor reward files provide pass/fail scores.
+Harbor reward files provide pass/fail scores. When reward files are absent,
+the judge module scores the ATIF trajectory instead.
 
 Model precedence:
     --model CLI flag (runtime override) > config.yaml (harness) > agent default
@@ -9,18 +10,23 @@ Model precedence:
 Trace pipeline:
     ADK Agent (OTel spans) → OtelToAtifConverter → AtifTrajectory → trajectory.json
     Harbor verifier → reward.txt/reward.json → HarborReward
+    (or) Judge → JudgeResult → score
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import yaml
 
 from adk_meta_harness.trace.atif import AtifTrajectory
 from adk_meta_harness.trace.harbor_reward import HarborReward, parse_reward_dir
 from adk_meta_harness.trace.otel_to_atif import OtelToAtifConverter
+
+if TYPE_CHECKING:
+    from adk_meta_harness.judge.base import JudgeProtocol
 
 
 def load_model_from_config(candidate_dir: Path) -> str | None:
@@ -130,8 +136,17 @@ async def evaluate_candidate(
     search_task_names: list[str] | None = None,
     holdout_task_names: list[str] | None = None,
     output_dir: Path | None = None,
+    judge: JudgeProtocol | None = None,
 ) -> EvalOutput:
     """Evaluate a candidate harness on search and holdout tasks.
+
+    Scoring logic:
+    1. If Harbor reward files (reward.txt/reward.json) exist for a task,
+       use them for deterministic pass/fail scoring.
+    2. If reward files are absent and a judge is provided, the judge scores
+       the ATIF trajectory for that task.
+    3. If neither reward files nor a judge exist, the task is marked as failed
+       with score 0.0.
 
     Args:
         candidate_dir: Path to the candidate harness directory.
@@ -144,6 +159,7 @@ async def evaluate_candidate(
         holdout_task_names: Task names for the holdout set.
         output_dir: Directory to write trajectory.json and reward files.
             Defaults to candidate_dir / "evaluation".
+        judge: Optional judge for scoring traces when Harbor rewards absent.
 
     Returns:
         EvalOutput with search and holdout results.
@@ -180,13 +196,23 @@ async def evaluate_candidate(
             timeout=timeout,
         )
 
-        # Check Harbor reward files
+        # Check Harbor reward files — prefer deterministic scoring
         task_logs_dir = output_dir / task_name
         reward = parse_reward_dir(task_logs_dir)
         if reward.score > 0 or reward.passed:
             result.reward = reward
             result.score = reward.score
             result.passed = reward.passed
+        elif judge is not None and result.trajectory is not None:
+            # No Harbor reward — use judge to score the trajectory
+            trace_text = result.trace_summary
+            judge_result = await judge.judge_trace(
+                task_instruction=instruction,
+                trace=trace_text,
+                task_name=task_name,
+            )
+            result.score = judge_result.score
+            result.passed = judge_result.score >= 0.5
 
         # Write trajectory to disk
         if result.trajectory:
