@@ -7,7 +7,7 @@ from adk_meta_harness.candidate import (
     Candidate,
     CandidateDiff,
     create_candidate,
-    init_experience_dir,
+    init_candidates_dir,
 )
 
 
@@ -58,7 +58,7 @@ def test_create_candidate():
 
     exp_dir = Path(tempfile.mkdtemp())
     candidate = create_candidate(
-        experience_dir=exp_dir,
+        candidates_dir=exp_dir,
         source=src,
         version=0,
         description="baseline",
@@ -69,12 +69,12 @@ def test_create_candidate():
     assert candidate.version == 0
 
 
-def test_init_experience_dir():
+def test_init_candidates_dir():
     src = Path(tempfile.mkdtemp())
     (src / "agent.py").write_text("# agent")
 
-    exp_dir = Path(tempfile.mkdtemp()) / "experience"
-    candidate = init_experience_dir(exp_dir, src)
+    exp_dir = Path(tempfile.mkdtemp()) / "candidates"
+    candidate = init_candidates_dir(exp_dir, src)
 
     assert candidate.version == 0
     assert (exp_dir / "results.tsv").exists()

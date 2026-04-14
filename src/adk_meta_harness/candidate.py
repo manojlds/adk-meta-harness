@@ -139,13 +139,13 @@ class Candidate:
 
 
 def create_candidate(
-    experience_dir: Path,
+    candidates_dir: Path,
     source: Path,
     version: int,
     parent_version: int | None = None,
     description: str = "",
 ) -> Candidate:
-    dest = experience_dir / f"{CANDIDATE_DIR_PREFIX}{version:04d}"
+    dest = candidates_dir / f"{CANDIDATE_DIR_PREFIX}{version:04d}"
     if dest.exists():
         shutil.rmtree(dest)
     shutil.copytree(source, dest)
@@ -159,11 +159,11 @@ def create_candidate(
     return candidate
 
 
-def init_experience_dir(experience_dir: Path, initial_harness: Path) -> Candidate:
-    experience_dir.mkdir(parents=True, exist_ok=True)
-    (experience_dir / "traces").mkdir(exist_ok=True)
+def init_candidates_dir(candidates_dir: Path, initial_harness: Path) -> Candidate:
+    candidates_dir.mkdir(parents=True, exist_ok=True)
+    (candidates_dir / "traces").mkdir(exist_ok=True)
     candidate = create_candidate(
-        experience_dir=experience_dir,
+        candidates_dir=candidates_dir,
         source=initial_harness,
         version=0,
         description="Initial baseline harness",
@@ -171,12 +171,12 @@ def init_experience_dir(experience_dir: Path, initial_harness: Path) -> Candidat
     # Create standard subdirectories in the candidate
     for subdir in ("traces", "evaluation", "validation", "proposal"):
         (candidate.path / subdir).mkdir(exist_ok=True)
-    results_path = experience_dir / "results.tsv"
+    results_path = candidates_dir / "results.tsv"
     if not results_path.exists():
         results_path.write_text(
             "version\tscore\tholdout_score\tsearch_score\tpassed\tkept\tdescription\n"
         )
-    learnings_path = experience_dir / "learnings.md"
+    learnings_path = candidates_dir / "learnings.md"
     if not learnings_path.exists():
         learnings_path.write_text(
             "# Learnings\n\nAccumulated insights from harness optimization.\n\n"

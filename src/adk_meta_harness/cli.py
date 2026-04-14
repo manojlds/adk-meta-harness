@@ -68,7 +68,7 @@ def main() -> None:
         help="Fraction of tasks to hold out for gating (default: 0.3)",
     )
     opt.add_argument(
-        "--experience-dir",
+        "--candidates-dir",
         type=Path,
         default=None,
         help="Directory to store candidates, traces, and learnings",
@@ -123,7 +123,7 @@ def main() -> None:
             model=args.model,
             iterations=args.iterations,
             holdout_ratio=args.holdout_ratio,
-            experience_dir=args.experience_dir,
+            candidates_dir=args.candidates_dir,
             timeout=args.timeout,
         )
         result = asyncio.run(optimize(config))

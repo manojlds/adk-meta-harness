@@ -19,7 +19,7 @@ from adk_meta_harness.candidate import (
     Candidate,
     CandidateDiff,
     create_candidate,
-    init_experience_dir,
+    init_candidates_dir,
 )
 from adk_meta_harness.gate import gate_decision
 from adk_meta_harness.harbor_adapter import evaluate_candidate
@@ -36,7 +36,7 @@ class OptimizeConfig:
     model: str = "gemini-2.5-flash"
     iterations: int = 10
     holdout_ratio: float = 0.3
-    experience_dir: Path | None = None
+    candidates_dir: Path | None = None
     judge_model: str | None = None
     timeout: int = 300
 
@@ -47,7 +47,7 @@ class OptimizeResult:
     best_holdout: float
     best_search: float
     iterations_completed: int
-    experience_dir: Path
+    candidates_dir: Path
     all_results: list[dict]
 
 
@@ -60,14 +60,14 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
     Returns:
         OptimizeResult with the best candidate and full history.
     """
-    experience_dir = config.experience_dir or config.dataset / "experience"
-    experience_dir.mkdir(parents=True, exist_ok=True)
+    candidates_dir = config.candidates_dir or config.dataset / "candidates"
+    candidates_dir.mkdir(parents=True, exist_ok=True)
 
     proposer = get_proposer(config.proposer, model=config.proposer_model)
-    learnings = Learnings(experience_dir / "learnings.md")
+    learnings = Learnings(candidates_dir / "learnings.md")
 
     # Initialize baseline candidate
-    baseline = init_experience_dir(experience_dir, config.initial_harness)
+    baseline = init_candidates_dir(candidates_dir, config.initial_harness)
     print(f"[v{baseline.version}] Baseline harness initialized")
 
     # Evaluate baseline
@@ -93,7 +93,7 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
         kept=True,
     )
     baseline.write_meta()
-    _append_results(experience_dir, baseline.diff)
+    _append_results(candidates_dir, baseline.diff)
     learnings.add(
         iteration=0,
         description="Baseline evaluation",
@@ -114,7 +114,7 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
         # Copy current best to a new candidate directory for the proposer to edit
         new_version = best_candidate.version + iteration
         new_candidate = create_candidate(
-            experience_dir=experience_dir,
+            candidates_dir=candidates_dir,
             source=best_candidate.path,
             version=new_version,
             parent_version=best_candidate.version,
@@ -128,7 +128,7 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
         print(f"  Proposing edit with {proposer.name}...")
         edit_result = await proposer.propose_edit(
             candidate_dir=new_candidate.path,
-            filesystem_dir=experience_dir,
+            filesystem_dir=candidates_dir,
             learnings=learnings.get_content(),
             instruction=instruction,
         )
@@ -174,7 +174,7 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
             kept=gate.kept,
         )
         new_candidate.write_meta()
-        _append_results(experience_dir, new_candidate.diff)
+        _append_results(candidates_dir, new_candidate.diff)
 
         print(f"  Holdout: {proposed_holdout:.4f} (prev: {best_holdout:.4f})")
         print(f"  Search: {proposed_search:.4f} (prev: {best_search:.4f})")
@@ -207,7 +207,7 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
         best_holdout=best_holdout,
         best_search=best_search,
         iterations_completed=config.iterations,
-        experience_dir=experience_dir,
+        candidates_dir=candidates_dir,
         all_results=all_results,
     )
 
@@ -254,9 +254,9 @@ def _build_proposer_instruction(iteration: int, best_score: float, learnings: Le
     )
 
 
-def _append_results(experience_dir: Path, diff: CandidateDiff) -> None:
+def _append_results(candidates_dir: Path, diff: CandidateDiff) -> None:
     """Append a row to results.tsv."""
-    results_path = experience_dir / "results.tsv"
+    results_path = candidates_dir / "results.tsv"
     kept_str = "keep" if diff.kept else "discard" if diff.kept is not None else "pending"
     row = (
         f"{diff.creation_path.name}\t{diff.score:.4f}\t{diff.holdout_score:.4f}\t"
