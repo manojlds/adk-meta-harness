@@ -33,7 +33,7 @@ Everything in this directory is mutable:
 
 ## What You Must NOT Do
 
-- Do not change the model unless the human explicitly requests it.
+- Do not change the model unless `config.yaml` has `allow_model_changes: true`.
 - Do not add task-specific hacks or benchmark-specific keyword rules.
 - Do not modify files outside this directory.
 
