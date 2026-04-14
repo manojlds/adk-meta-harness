@@ -3,6 +3,9 @@
 Uses ADK's AgentLoader for agent discovery and ATIF for trace collection.
 Harbor reward files provide pass/fail scores.
 
+Model precedence:
+    --model CLI flag (runtime override) > config.yaml (harness) > agent default
+
 Trace pipeline:
     ADK Agent (OTel spans) → OtelToAtifConverter → AtifTrajectory → trajectory.json
     Harbor verifier → reward.txt/reward.json → HarborReward
@@ -13,9 +16,44 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import yaml
+
 from adk_meta_harness.trace.atif import AtifTrajectory
 from adk_meta_harness.trace.harbor_reward import HarborReward, parse_reward_dir
 from adk_meta_harness.trace.otel_to_atif import OtelToAtifConverter
+
+
+def load_model_from_config(candidate_dir: Path) -> str | None:
+    """Read the model from the candidate's config.yaml.
+
+    Returns None if config.yaml doesn't exist or has no model key.
+    """
+    config_path = candidate_dir / "config.yaml"
+    if not config_path.exists():
+        return None
+    try:
+        data = yaml.safe_load(config_path.read_text())
+        if isinstance(data, dict) and "model" in data:
+            return str(data["model"])
+    except Exception:
+        pass
+    return None
+
+
+def set_model_in_config(candidate_dir: Path, model: str) -> None:
+    """Write the model into the candidate's config.yaml.
+
+    Creates config.yaml if it doesn't exist.
+    """
+    config_path = candidate_dir / "config.yaml"
+    data: dict = {}
+    if config_path.exists():
+        try:
+            data = yaml.safe_load(config_path.read_text()) or {}
+        except Exception:
+            data = {}
+    data["model"] = model
+    config_path.write_text(yaml.dump(data, default_flow_style=False))
 
 
 @dataclass
@@ -87,7 +125,7 @@ class EvalOutput:
 async def evaluate_candidate(
     candidate_dir: Path,
     tasks_dir: Path,
-    model: str = "gemini-2.5-flash",
+    model: str | None = None,
     timeout: int = 300,
     search_task_names: list[str] | None = None,
     holdout_task_names: list[str] | None = None,
@@ -98,7 +136,9 @@ async def evaluate_candidate(
     Args:
         candidate_dir: Path to the candidate harness directory.
         tasks_dir: Path to Harbor task definitions.
-        model: Model to use for the ADK agent.
+        model: Runtime override for the model. If provided, writes to
+            config.yaml before loading. If None, reads from config.yaml
+            or uses the agent's default.
         timeout: Timeout per task in seconds.
         search_task_names: Task names for the search set.
         holdout_task_names: Task names for the holdout set.
@@ -108,10 +148,15 @@ async def evaluate_candidate(
     Returns:
         EvalOutput with search and holdout results.
     """
+    if model is not None:
+        set_model_in_config(candidate_dir, model)
+
+    resolved_model = load_model_from_config(candidate_dir) or model or "gemini-2.5-flash"
+
     output_dir = output_dir or candidate_dir / "evaluation"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    agent, app = _load_adk_agent(candidate_dir, model)
+    agent, app = _load_adk_agent(candidate_dir, resolved_model)
     converter = OtelToAtifConverter()
 
     all_tasks = _discover_tasks(tasks_dir)
@@ -133,7 +178,6 @@ async def evaluate_candidate(
             instruction=instruction,
             task_name=task_name,
             timeout=timeout,
-            model=model,
         )
 
         # Check Harbor reward files
@@ -163,7 +207,21 @@ def _load_adk_agent(
     candidate_dir: Path,
     model: str = "gemini-2.5-flash",
 ) -> tuple:
-    """Load the ADK agent using the official AgentLoader."""
+    """Load the ADK agent using the official AgentLoader.
+
+    Handles all ADK patterns:
+    - agent.py with root_agent attribute
+    - agent.py with app attribute (App instance)
+    - __init__.py with root_agent or app
+    - root_agent.yaml config
+
+    The model is only set if the loaded agent doesn't already have one.
+    This allows config.yaml and agent.py to control the model, with
+    the CLI --model flag as a runtime override.
+
+    Returns:
+        Tuple of (root_agent, app).
+    """
     from google.adk.agents.base_agent import BaseAgent
     from google.adk.apps.app import App
     from google.adk.cli.utils.agent_loader import AgentLoader
@@ -222,7 +280,6 @@ async def _run_agent_on_task(
     instruction: str,
     task_name: str,
     timeout: int,
-    model: str = "gemini-2.5-flash",
 ) -> EvalResult:
     """Run an ADK agent on a single task and collect ATIF trajectory.
 
@@ -253,7 +310,7 @@ async def _run_agent_on_task(
         trajectory = converter.adk_events_to_atif(
             events,
             agent_name=getattr(agent, "name", "adk-agent"),
-            model_name=model,
+            model_name=getattr(agent, "model", ""),
         )
 
         return EvalResult(

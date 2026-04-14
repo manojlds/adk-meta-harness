@@ -1,12 +1,16 @@
-"""CLI entry point for adk-meta-harness."""
+"""CLI entry point for adk-meta-harness.
+
+Also callable as `amh` via the alias in pyproject.toml.
+
+Model precedence:
+    --model CLI flag (runtime override) > config.yaml (harness) > agent default
+"""
 
 from __future__ import annotations
 
 import argparse
 import asyncio
 from pathlib import Path
-
-from adk_meta_harness.outer_loop import OptimizeConfig, optimize
 
 
 def main() -> None:
@@ -23,7 +27,7 @@ def main() -> None:
         "--dataset",
         type=Path,
         required=True,
-        help="Path to Harbor task directory",
+        help="Path to Harbor task/dataset directory",
     )
     opt.add_argument(
         "--initial-harness",
@@ -40,12 +44,16 @@ def main() -> None:
     opt.add_argument(
         "--proposer-model",
         default=None,
-        help="Model override for the proposer",
+        help="Model override for the proposer CLI",
     )
     opt.add_argument(
         "--model",
-        default="gemini-2.5-flash",
-        help="Model for the ADK agent being optimized (default: gemini-2.5-flash)",
+        default=None,
+        help=(
+            "Runtime override for the ADK agent model. "
+            "If not set, reads from config.yaml in the harness. "
+            "If config.yaml has no model, uses the agent's default."
+        ),
     )
     opt.add_argument(
         "--iterations",
@@ -84,12 +92,16 @@ def main() -> None:
         "--dataset",
         type=Path,
         required=True,
-        help="Path to Harbor task directory",
+        help="Path to Harbor task/dataset directory",
     )
     ev.add_argument(
         "--model",
-        default="gemini-2.5-flash",
-        help="Model for the ADK agent (default: gemini-2.5-flash)",
+        default=None,
+        help=(
+            "Runtime override for the ADK agent model. "
+            "If not set, reads from config.yaml. "
+            "If config.yaml has no model, uses the agent's default."
+        ),
     )
     ev.add_argument(
         "--timeout",
@@ -101,6 +113,8 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "optimize":
+        from adk_meta_harness.outer_loop import OptimizeConfig, optimize
+
         config = OptimizeConfig(
             dataset=args.dataset,
             initial_harness=args.initial_harness,
