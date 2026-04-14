@@ -26,6 +26,7 @@ dev = [
 
 [project.scripts]
 adk-meta-harness = "adk_meta_harness.cli:main"
+amh = "adk_meta_harness.cli:main"
 
 [build-system]
 requires = ["hatchling"]
