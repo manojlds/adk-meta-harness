@@ -1,8 +1,9 @@
 """Harbor ADK adapter — runs an ADK agent on Harbor tasks.
 
 Uses ADK's AgentLoader for agent discovery and ATIF for trace collection.
-Harbor reward files provide pass/fail scores. When reward files are absent,
-the judge module scores the ATIF trajectory instead.
+Primary scoring uses Harbor reward files and deterministic task verifiers.
+When deterministic signals are unavailable, the judge module can score ATIF
+trajectories as a fallback.
 
 Model precedence:
     --model CLI flag (runtime override) > config.yaml (harness) > agent default
@@ -24,6 +25,7 @@ import yaml
 from adk_meta_harness.trace.atif import AtifTrajectory
 from adk_meta_harness.trace.harbor_reward import HarborReward, parse_reward_dir
 from adk_meta_harness.trace.otel_to_atif import OtelToAtifConverter
+from adk_meta_harness.verify import verify_task
 
 if TYPE_CHECKING:
     from adk_meta_harness.judge.base import JudgeProtocol
@@ -141,12 +143,10 @@ async def evaluate_candidate(
     """Evaluate a candidate harness on search and holdout tasks.
 
     Scoring logic:
-    1. If Harbor reward files (reward.txt/reward.json) exist for a task,
-       use them for deterministic pass/fail scoring.
-    2. If reward files are absent and a judge is provided, the judge scores
-       the ATIF trajectory for that task.
-    3. If neither reward files nor a judge exist, the task is marked as failed
-       with score 0.0.
+    1. If Harbor reward files (reward.txt/reward.json) exist, use them
+    2. Else deterministic verification (task verify.py or built-in patterns)
+    3. Else if a judge is provided, score the trajectory with the judge
+    4. Else mark as failed (score 0.0)
 
     Args:
         candidate_dir: Path to the candidate harness directory.
@@ -186,6 +186,8 @@ async def evaluate_candidate(
         if not task_path.exists():
             continue
         instruction = _read_instruction(task_path)
+        task_logs_dir = output_dir / task_name
+        task_logs_dir.mkdir(parents=True, exist_ok=True)
 
         result = await _run_agent_on_task(
             agent=agent,
@@ -196,15 +198,35 @@ async def evaluate_candidate(
             timeout=timeout,
         )
 
-        # Check Harbor reward files — prefer deterministic scoring
-        task_logs_dir = output_dir / task_name
+        scored = False
+
+        # 1) Harbor reward files from verifier scripts (authoritative)
         reward = parse_reward_dir(task_logs_dir)
         if reward.score > 0 or reward.passed:
             result.reward = reward
             result.score = reward.score
             result.passed = reward.passed
-        elif judge is not None and result.trajectory is not None:
-            # No Harbor reward — use judge to score the trajectory
+            scored = True
+
+        # 2) Deterministic local verification fallback
+        if not scored:
+            verify_result = verify_task(
+                task_name=task_name,
+                task_path=task_path,
+                trajectory=result.trajectory,
+                working_dir=candidate_dir,
+            )
+            if verify_result is not None:
+                passed, score = verify_result
+                result.passed = passed
+                result.score = score
+                result.reward = HarborReward(score=score, passed=passed)
+                # Persist fallback score as reward.txt for consistent artifacts
+                (task_logs_dir / "reward.txt").write_text(f"{score}\n")
+                scored = True
+
+        # 3) Judge fallback only if still unscored
+        if not scored and judge is not None and result.trajectory is not None:
             trace_text = result.trace_summary
             judge_result = await judge.judge_trace(
                 task_instruction=instruction,
