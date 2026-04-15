@@ -13,6 +13,9 @@ class OpenCodeProposer(CodingAgentCLIProposer):
     Uses ``opencode run`` which is the non-interactive execution mode.
     The ``run`` command accepts a message, processes it, and exits —
     no TUI, no interactive session.
+
+    Matches kollywood's adapter: no --format json, prompt via argv,
+    bash wrapper with /dev/null stdin.
     """
 
     def __init__(self, model: str | None = None):
@@ -22,6 +25,7 @@ class OpenCodeProposer(CodingAgentCLIProposer):
         super().__init__(
             cli_command="opencode",
             cli_args=cli_args,
+            prompt_mode="argv",
         )
 
     def build_command(self, candidate_dir: Path, instruction: str) -> list[str]:
@@ -31,8 +35,6 @@ class OpenCodeProposer(CodingAgentCLIProposer):
             *self.cli_args,
             "--dir",
             str(candidate_dir),
-            "--format",
-            "json",
         ]
         cmd.append(instruction)
         return cmd
