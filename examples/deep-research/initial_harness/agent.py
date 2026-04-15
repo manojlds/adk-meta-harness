@@ -32,7 +32,7 @@ def create_agent(model: str | None = None) -> Agent:
     before_cb, after_cb = create_session_scoped_loader_callbacks(tool_registry)
 
     return Agent(
-        name="deep-research-agent",
+        name="deep_research_agent",
         model=model,
         instruction=system_prompt,
         tools=[

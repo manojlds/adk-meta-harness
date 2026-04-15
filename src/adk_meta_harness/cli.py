@@ -12,6 +12,10 @@ import argparse
 import asyncio
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -163,7 +167,7 @@ def main() -> None:
 
         judge = get_judge(args.judge, model=args.judge_model)
 
-        search, holdout = asyncio.run(
+        eval_output = asyncio.run(
             evaluate_candidate(
                 candidate_dir=args.candidate,
                 tasks_dir=args.dataset,
@@ -172,7 +176,7 @@ def main() -> None:
                 judge=judge,
             )
         )
-        all_results = search + holdout
+        all_results = eval_output.search_results + eval_output.holdout_results
         passed = sum(1 for r in all_results if r.passed)
         total = len(all_results)
         print(f"\nResults: {passed}/{total} passed ({passed/total:.1%})")

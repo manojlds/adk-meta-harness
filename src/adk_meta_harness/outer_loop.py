@@ -75,13 +75,15 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
     print(f"[v{baseline.version}] Baseline harness initialized")
 
     # Evaluate baseline
-    search_results, holdout_results = await evaluate_candidate(
+    eval_output = await evaluate_candidate(
         candidate_dir=baseline.path,
         tasks_dir=config.dataset,
         model=config.model,
         timeout=config.timeout,
         judge=config.judge,
     )
+    search_results = eval_output.search_results
+    holdout_results = eval_output.holdout_results
 
     baseline_score = _compute_score(search_results, holdout_results)
     search_score = baseline_score.get("search", 0.0)
@@ -144,13 +146,15 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
         _cleanup_proposer_files(new_candidate.path)
 
         # Evaluate the proposed harness
-        search_results, holdout_results = await evaluate_candidate(
+        eval_output = await evaluate_candidate(
             candidate_dir=new_candidate.path,
             tasks_dir=config.dataset,
             model=config.model,
             timeout=config.timeout,
             judge=config.judge,
         )
+        search_results = eval_output.search_results
+        holdout_results = eval_output.holdout_results
 
         proposed_score = _compute_score(search_results, holdout_results)
         proposed_search = proposed_score.get("search", 0.0)

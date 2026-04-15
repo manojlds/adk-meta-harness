@@ -219,14 +219,33 @@ async def evaluate_candidate(
             traj_path = task_logs_dir / "trajectory.json"
             result.trajectory.to_json_file(traj_path)
 
-        if task_name in search_set:
-            output.search_results.append(result)
         if task_name in holdout_set:
             output.holdout_results.append(result)
-        elif not holdout_set:
+        else:
             output.search_results.append(result)
 
     return output
+
+
+def _ensure_importable(candidate_dir: Path) -> None:
+    """Ensure the candidate directory is importable by ADK's AgentLoader.
+
+    AgentLoader expects:
+    - The directory to be a Python package (has __init__.py)
+    - agent.py to expose a ``root_agent`` attribute (not ``agent``)
+
+    This function creates __init__.py if missing and patches agent.py
+    to add a ``root_agent`` alias if the module uses ``agent`` instead.
+    """
+    init_path = candidate_dir / "__init__.py"
+    if not init_path.exists():
+        init_path.write_text("")
+
+    agent_path = candidate_dir / "agent.py"
+    if agent_path.exists():
+        content = agent_path.read_text()
+        if "root_agent" not in content and "agent =" in content:
+            agent_path.write_text(content + "\nroot_agent = agent\n")
 
 
 def _load_adk_agent(
@@ -241,6 +260,9 @@ def _load_adk_agent(
     - __init__.py with root_agent or app
     - root_agent.yaml config
 
+    Before loading, ensures the directory is importable (__init__.py)
+    and agent.py exposes root_agent.
+
     The model is only set if the loaded agent doesn't already have one.
     This allows config.yaml and agent.py to control the model, with
     the CLI --model flag as a runtime override.
@@ -251,6 +273,8 @@ def _load_adk_agent(
     from google.adk.agents.base_agent import BaseAgent
     from google.adk.apps.app import App
     from google.adk.cli.utils.agent_loader import AgentLoader
+
+    _ensure_importable(candidate_dir)
 
     parent_dir = str(candidate_dir.parent)
     agent_name = candidate_dir.name
@@ -315,6 +339,7 @@ async def _run_agent_on_task(
     try:
         from google.adk.runners import Runner
         from google.adk.sessions import InMemorySessionService
+        from google.genai import types
 
         session_service = InMemorySessionService()
         runner = Runner(
@@ -322,11 +347,18 @@ async def _run_agent_on_task(
             session_service=session_service,
         )
 
-        content = {"parts": [{"text": instruction}]}
+        # Create session before running
+        await session_service.create_session(
+            app_name=getattr(app, "name", "adk-meta-harness"),
+            user_id="meta_harness",
+            session_id=task_name,
+        )
+
+        content = types.Content(parts=[types.Part(text=instruction)], role="user")
         events = []
 
         async for event in runner.run_async(
-            user_id="meta-harness",
+            user_id="meta_harness",
             session_id=task_name,
             new_message=content,
         ):

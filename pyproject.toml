@@ -12,6 +12,7 @@ dependencies = [
     "adk-tool-search>=0.1.0",
     "harbor>=0.3.0",
     "litellm>=1.0",
+    "python-dotenv>=1.0",
     "pyyaml>=6.0",
     "rich>=13.0",
 ]

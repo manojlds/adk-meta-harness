@@ -32,7 +32,7 @@ def create_agent(
     before_cb, after_cb = create_session_scoped_loader_callbacks(registry)
 
     return LlmAgent(
-        name="tool-search-agent",
+        name="tool_search_agent",
         model=model,
         instruction=(
             "You are a helpful assistant. Use search_tools to find relevant "

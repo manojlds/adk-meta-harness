@@ -23,7 +23,7 @@ def create_agent(model: str | None = None) -> Agent:
     registry.discover(["./skills"])
 
     return Agent(
-        name="skills-agent",
+        name="skills_agent",
         model=model,
         instruction=system_prompt,
         tools=[

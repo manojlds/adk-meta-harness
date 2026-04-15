@@ -20,7 +20,7 @@ def create_agent(model: str | None = None) -> Agent:
     system_prompt = (Path(__file__).parent / "system_prompt.md").read_text()
 
     return Agent(
-        name="vanilla-agent",
+        name="vanilla_agent",
         model=model,
         instruction=system_prompt,
         tools=[],
@@ -28,3 +28,4 @@ def create_agent(model: str | None = None) -> Agent:
 
 
 agent = create_agent()
+root_agent = agent
