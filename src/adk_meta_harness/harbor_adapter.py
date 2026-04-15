@@ -182,7 +182,7 @@ async def evaluate_candidate(
     output = EvalOutput()
 
     for task_name in all_tasks:
-        task_path = tasks_dir / task_name
+        task_path = _resolve_task_path(tasks_dir, task_name)
         if not task_path.exists():
             continue
         instruction = _read_instruction(task_path)
@@ -302,17 +302,43 @@ def _load_adk_agent(
 
 
 def _discover_tasks(tasks_dir: Path) -> list[str]:
-    """Discover Harbor task directories."""
+    """Discover Harbor task directories.
+
+    Handles both flat and nested directory structures:
+    - Flat: tasks_dir/read-file/instruction.md
+    - Nested (Harbor default): tasks_dir/read-file/read-file/instruction.md
+
+    Returns task names that have either an instruction.md or task.toml.
+    For nested structures, returns the outer directory name (e.g. "read-file").
+    """
     if not tasks_dir.exists():
         return []
-    return [
-        d.name
-        for d in sorted(tasks_dir.iterdir())
-        if d.is_dir()
-        and (
-            (d / "instruction.md").exists() or (d / "task.toml").exists()
-        )
-    ]
+    tasks = []
+    for d in sorted(tasks_dir.iterdir()):
+        if not d.is_dir():
+            continue
+        # Check flat structure: tasks_dir/task-name/instruction.md
+        if (d / "instruction.md").exists() or (d / "task.toml").exists():
+            tasks.append(d.name)
+        # Check nested structure: tasks_dir/task-name/task-name/instruction.md
+        elif (d / d.name / "instruction.md").exists() or (d / d.name / "task.toml").exists():
+            tasks.append(d.name)
+    return tasks
+
+
+def _resolve_task_path(tasks_dir: Path, task_name: str) -> Path:
+    """Resolve the actual task directory.
+
+    Harbor tasks can be nested (task-name/task-name/) or flat (task-name/).
+    Returns the path containing instruction.md, task.toml, etc.
+    """
+    flat = tasks_dir / task_name
+    nested = tasks_dir / task_name / task_name
+    if (flat / "instruction.md").exists() or (flat / "task.toml").exists():
+        return flat
+    if (nested / "instruction.md").exists() or (nested / "task.toml").exists():
+        return nested
+    return flat
 
 
 def _read_instruction(task_path: Path) -> str:
