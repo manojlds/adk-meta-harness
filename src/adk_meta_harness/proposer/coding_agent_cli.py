@@ -6,12 +6,18 @@ Works with any coding agent CLI that:
 3. Produces file edits in the working directory
 
 Tested with: OpenCode, Pi
+
+Based on kollywood's CLI adapter pattern:
+- argv mode: prompt passed as final command-line arg (OpenCode, Claude, Codex)
+- stdin mode: prompt piped via stdin (Pi)
+- Both use bash wrapper with /dev/null stdin to prevent interactive prompts
 """
 
 from __future__ import annotations
 
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 
 PROPOSER_TEMPLATE = """\
@@ -71,6 +77,7 @@ class CodingAgentCLIProposer:
     """Generic adapter for CLI-based coding agents.
 
     Subclasses override `build_command` to customize the CLI invocation.
+    Set `prompt_mode` to 'argv' (prompt as last arg) or 'stdin' (prompt piped).
     """
 
     def __init__(
@@ -79,11 +86,13 @@ class CodingAgentCLIProposer:
         cli_args: list[str] | None = None,
         proposer_template: str = PROPOSER_TEMPLATE,
         env: dict[str, str] | None = None,
+        prompt_mode: str = "argv",
     ):
         self.cli_command = cli_command
         self.cli_args = cli_args or []
         self.proposer_template = proposer_template
         self.env = env
+        self.prompt_mode = prompt_mode
 
     @property
     def name(self) -> str:
@@ -111,14 +120,11 @@ class CodingAgentCLIProposer:
         # Build and run the CLI command
         cmd = self.build_command(candidate_dir, instruction)
         env = {**os.environ, **(self.env or {})}
-        result = subprocess.run(
-            cmd,
-            cwd=str(candidate_dir),
-            capture_output=True,
-            text=True,
-            env=env,
-            timeout=1800,
-        )
+
+        if self.prompt_mode == "stdin":
+            result = _run_stdin_mode(cmd, instruction, cwd=str(candidate_dir), env=env)
+        else:
+            result = _run_argv_mode(cmd, cwd=str(candidate_dir), env=env)
 
         # Snapshot after
         after = _snapshot_files(candidate_dir)
@@ -150,6 +156,70 @@ class CodingAgentCLIProposer:
         Subclasses should override this for CLI-specific flags.
         """
         return [self.cli_command, *self.cli_args]
+
+
+def _run_argv_mode(
+    cmd: list[str],
+    cwd: str,
+    env: dict[str, str],
+    timeout: int = 1800,
+) -> subprocess.CompletedProcess:
+    """Run a CLI in argv mode using bash wrapper with /dev/null stdin.
+
+    Matches kollywood's approach: wraps in bash -lc with stdin from /dev/null
+    to prevent the CLI from waiting for more interactive input.
+    """
+    bash_cmd = [
+        "bash", "-lc",
+        'exec "$1" "${@:2}" < /dev/null',
+        "--",
+        *cmd,
+    ]
+    return subprocess.run(
+        bash_cmd,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=timeout,
+    )
+
+
+def _run_stdin_mode(
+    cmd: list[str],
+    prompt: str,
+    cwd: str,
+    env: dict[str, str],
+    timeout: int = 1800,
+) -> subprocess.CompletedProcess:
+    """Run a CLI in stdin mode, piping the prompt via a temp file.
+
+    Matches kollywood's approach for Pi: writes prompt to a temp file,
+    pipes it via bash redirection.
+    """
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+        f.write(prompt)
+        prompt_file = f.name
+
+    try:
+        bash_cmd = [
+            "bash", "-lc",
+            'exec "$2" "${@:3}" < "$1"',
+            "--",
+            prompt_file,
+            *cmd,
+        ]
+        return subprocess.run(
+            bash_cmd,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=timeout,
+        )
+    finally:
+        import os as _os
+        _os.unlink(prompt_file)
 
 
 def _snapshot_files(directory: Path) -> dict[str, str]:
