@@ -33,7 +33,6 @@ class OpenCodeProposer(CodingAgentCLIProposer):
             str(candidate_dir),
             "--format",
             "json",
-            "--no-session",
         ]
         cmd.append(instruction)
         return cmd

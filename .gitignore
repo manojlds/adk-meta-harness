@@ -10,5 +10,6 @@ build/
 .pytest_cache/
 .mypy_cache/
 candidates/
+.opencode/
 *.log
 .env

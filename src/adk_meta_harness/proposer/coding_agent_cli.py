@@ -154,10 +154,11 @@ class CodingAgentCLIProposer:
 
 def _snapshot_files(directory: Path) -> dict[str, str]:
     """Snapshot all files in a directory (relative paths -> content)."""
+    _skip_dirs = {".git", "__pycache__", ".ruff_cache", ".pytest_cache", "node_modules", ".opencode"}
     snapshot = {}
     for f in directory.rglob("*"):
         if f.is_file() and f.name not in ("PROPOSER.md", "learnings.md"):
-            if ".git" in f.parts or "__pycache__" in f.parts:
+            if any(d in f.parts for d in _skip_dirs):
                 continue
             rel = str(f.relative_to(directory))
             try:
