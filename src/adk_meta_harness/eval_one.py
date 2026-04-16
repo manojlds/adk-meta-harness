@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import sys
 from pathlib import Path
 
@@ -10,7 +9,8 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
-from adk_meta_harness.harbor_adapter import _ensure_importable, _read_instruction
+from adk_meta_harness.harbor_adapter import _ensure_importable, _load_collector_span_file
+from adk_meta_harness.trace.atif import AtifAgent, AtifTrajectory
 from adk_meta_harness.trace.otel_to_atif import OtelToAtifConverter
 
 
@@ -59,7 +59,7 @@ def main() -> None:
 
     session_service = InMemorySessionService()
     runner = Runner(app=app, session_service=session_service)
-    session = asyncio.get_event_loop().run_until_complete(
+    asyncio.get_event_loop().run_until_complete(
         session_service.create_session(
             app_name=getattr(app, "name", "adk-meta-harness"),
             user_id="meta_harness",
@@ -69,24 +69,53 @@ def main() -> None:
 
     content = types.Content(parts=[types.Part(text=args.instruction)], role="user")
 
-    events = []
+    run_error: Exception | None = None
 
-    async def _run():
-        async for event in runner.run_async(
-            user_id="meta_harness",
-            session_id="eval-one",
-            new_message=content,
-        ):
-            events.append(event)
+    try:
 
-    asyncio.get_event_loop().run_until_complete(_run())
+        async def _run():
+            async for _ in runner.run_async(
+                user_id="meta_harness",
+                session_id="eval-one",
+                new_message=content,
+            ):
+                pass
 
+        asyncio.get_event_loop().run_until_complete(_run())
+    except Exception as e:
+        run_error = e
+
+    # Read trajectory from OTel Collector span file.
     converter = OtelToAtifConverter()
-    trajectory = converter.adk_events_to_atif(
-        events,
-        agent_name=getattr(root_agent, "name", "adk-agent"),
-        model_name=model,
-    )
+    trajectory: AtifTrajectory | None = None
+    span_file = _load_collector_span_file(output_dir.parent, "eval-one")
+    if span_file is not None:
+        try:
+            trajectory = converter.convert_file(span_file)
+        except Exception:
+            trajectory = None
+
+    if trajectory is None:
+        trajectory = AtifTrajectory(
+            agent=AtifAgent(
+                name=getattr(root_agent, "name", "adk-agent"),
+                version="1.0",
+                model_name=model,
+            ),
+        )
+
+    if run_error and not trajectory.steps:
+        from adk_meta_harness.trace.atif import AtifStep
+
+        trajectory.steps.append(
+            AtifStep(
+                step_id="step-error",
+                timestamp="",
+                source="system",
+                message=f"Run error: {run_error}",
+            )
+        )
+        trajectory.compute_final_metrics()
 
     trajectory.to_json_file(output_dir / "trajectory.json")
 

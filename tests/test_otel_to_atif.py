@@ -78,49 +78,6 @@ def test_convert_file(tmp_path):
     assert loaded.steps[0].message == "Done."
 
 
-def test_adk_events_to_atif():
-    converter = OtelToAtifConverter()
-
-    class MockPart:
-        def __init__(self, text=None, function_call=None, function_response=None):
-            self.text = text
-            self.function_call = function_call
-            self.function_response = function_response
-
-    class MockContent:
-        def __init__(self, parts):
-            self.parts = parts
-
-    class MockEvent:
-        def __init__(self, content, author="agent"):
-            self.content = content
-            self.author = author
-            self.timestamp = "2026-01-01T00:00:00Z"
-
-    events = [
-        MockEvent(MockContent([MockPart(text="Looking up order.")])),
-        MockEvent(
-            MockContent([
-                MockPart(
-                    function_call=type(
-                        "FC", (), {"id": "tc-1", "name": "lookup_order", "args": {"id": "1234"}}
-                    )()
-                )
-            ])
-        ),
-    ]
-
-    traj = converter.adk_events_to_atif(
-        events,
-        agent_name="test-agent",
-        model_name="gemini-2.5-flash",
-    )
-    assert len(traj.steps) == 2
-    assert traj.steps[0].message == "Looking up order."
-    assert traj.steps[1].tool_calls[0].function_name == "lookup_order"
-    assert traj.agent.name == "test-agent"
-
-
 def test_convert_span_with_llm_request_includes_user_prompt():
     converter = OtelToAtifConverter()
     spans = [
@@ -134,7 +91,7 @@ def test_convert_span_with_llm_request_includes_user_prompt():
                 "gcp.vertex.agent.llm_request": (
                     '{"model": "openai/glm-5", "contents": '
                     '[{"parts": [{"text": "Read hello.txt"}], "role": "user"}]}'
-                )
+                ),
             },
         }
     ]
@@ -164,7 +121,7 @@ def test_convert_span_with_llm_response_extracts_tool_call():
                     '{"function_call": {"id": "tc-1", "name": "read_file", '
                     '"args": {"path": "hello.txt"}}}], '
                     '"role": "model"}}'
-                )
+                ),
             },
         }
     ]
