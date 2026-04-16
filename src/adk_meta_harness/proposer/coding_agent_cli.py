@@ -121,10 +121,11 @@ class CodingAgentCLIProposer:
         cmd = self.build_command(candidate_dir, instruction)
         env = {**os.environ, **(self.env or {})}
 
+        abs_cwd = str(candidate_dir.resolve())
         if self.prompt_mode == "stdin":
-            result = _run_stdin_mode(cmd, instruction, cwd=str(candidate_dir), env=env)
+            result = _run_stdin_mode(cmd, instruction, cwd=abs_cwd, env=env)
         else:
-            result = _run_argv_mode(cmd, cwd=str(candidate_dir), env=env)
+            result = _run_argv_mode(cmd, cwd=abs_cwd, env=env)
 
         # Snapshot after
         after = _snapshot_files(candidate_dir)
@@ -134,6 +135,29 @@ class CodingAgentCLIProposer:
 
         # Detect change type
         change_type = _detect_change_type(before, after)
+
+        # If no edits were produced, retry once with an explicit "must edit" nudge.
+        if change_type == "none":
+            retry_instruction = (
+                instruction + "\n\nIMPORTANT: Your last attempt made no file edits. "
+                "You must now modify at least one harness file in this candidate "
+                "directory (agent.py, system_prompt.md, config.yaml, tools/, skills/, "
+                "callbacks/, or routing/). Do not return analysis-only output."
+            )
+            retry_cmd = self.build_command(candidate_dir, retry_instruction)
+            if self.prompt_mode == "stdin":
+                result = _run_stdin_mode(
+                    retry_cmd,
+                    retry_instruction,
+                    cwd=abs_cwd,
+                    env=env,
+                )
+            else:
+                result = _run_argv_mode(retry_cmd, cwd=abs_cwd, env=env)
+
+            after = _snapshot_files(candidate_dir)
+            diff_summary = _compute_diff_summary(before, after)
+            change_type = _detect_change_type(before, after)
 
         # Clean up proposer files
         proposer_md.unlink(missing_ok=True)
@@ -170,7 +194,8 @@ def _run_argv_mode(
     to prevent the CLI from waiting for more interactive input.
     """
     bash_cmd = [
-        "bash", "-lc",
+        "bash",
+        "-lc",
         'exec "$1" "${@:2}" < /dev/null',
         "--",
         *cmd,
@@ -203,7 +228,8 @@ def _run_stdin_mode(
 
     try:
         bash_cmd = [
-            "bash", "-lc",
+            "bash",
+            "-lc",
             'exec "$2" "${@:3}" < "$1"',
             "--",
             prompt_file,
@@ -219,12 +245,20 @@ def _run_stdin_mode(
         )
     finally:
         import os as _os
+
         _os.unlink(prompt_file)
 
 
 def _snapshot_files(directory: Path) -> dict[str, str]:
     """Snapshot all files in a directory (relative paths -> content)."""
-    _skip_dirs = {".git", "__pycache__", ".ruff_cache", ".pytest_cache", "node_modules", ".opencode"}
+    _skip_dirs = {
+        ".git",
+        "__pycache__",
+        ".ruff_cache",
+        ".pytest_cache",
+        "node_modules",
+        ".opencode",
+    }
     snapshot = {}
     for f in directory.rglob("*"):
         if f.is_file() and f.name not in ("PROPOSER.md", "learnings.md"):

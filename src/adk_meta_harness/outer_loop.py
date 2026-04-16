@@ -100,6 +100,7 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
         kept=True,
     )
     baseline.write_meta()
+    _link_traces_to_candidate(baseline.path)
     _append_results(candidates_dir, baseline.diff)
     learnings.add(
         iteration=0,
@@ -107,6 +108,7 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
         kept=True,
         holdout_score=holdout_score,
         search_score=search_score,
+        failure_patterns=_extract_failure_patterns(search_results),
     )
 
     best_candidate = baseline
@@ -118,8 +120,7 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
     for iteration in range(1, config.iterations + 1):
         print(f"\n=== Iteration {iteration}/{config.iterations} ===")
 
-        # Copy current best to a new candidate directory for the proposer to edit
-        new_version = best_candidate.version + iteration
+        new_version = baseline.version + iteration
         new_candidate = create_candidate(
             candidates_dir=candidates_dir,
             source=best_candidate.path,
@@ -159,6 +160,8 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
         proposed_score = _compute_score(search_results, holdout_results)
         proposed_search = proposed_score.get("search", 0.0)
         proposed_holdout = proposed_score.get("holdout", proposed_search)
+
+        _link_traces_to_candidate(new_candidate.path)
 
         # Gate decision
         complexity_current = _count_harness_files(new_candidate.path)
@@ -222,9 +225,7 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
     )
 
 
-def _compute_score(
-    search_results: list, holdout_results: list
-) -> dict:
+def _compute_score(search_results: list, holdout_results: list) -> dict:
     """Compute combined score from search and holdout results."""
     all_results = search_results + holdout_results
     if not all_results:
@@ -257,6 +258,9 @@ def _build_proposer_instruction(iteration: int, best_score: float, learnings: Le
         f"Iteration {iteration}. Current best holdout score: {best_score:.4f}.\n\n"
         "Read traces from previous candidates to diagnose failure patterns. "
         "Propose ONE targeted harness change that fixes a class of failures.\n\n"
+        "You MUST make at least one concrete file edit in this candidate directory "
+        "(agent.py, system_prompt.md, config.yaml, tools/, skills/, callbacks/, or routing/). "
+        "Do not return analysis-only output.\n\n"
         "Focus on: system prompts, skills, tool definitions, callbacks, routing, "
         "or agent configuration. Make the smallest effective change.\n\n"
         "After your change, the harness will be evaluated on a holdout set "
@@ -298,6 +302,28 @@ def _extract_failure_patterns(search_results: list) -> list[str]:
         if not r.passed and r.error:
             patterns.append(f"{r.task_name}: {r.error[:100]}")
     return patterns[:10]
+
+
+def _link_traces_to_candidate(candidate_dir: Path) -> None:
+    """Copy trajectory.json from evaluation/<task>/ into traces/<task>.json.
+
+    The proposer template instructs the agent to browse ``traces/`` for
+    prior trajectory data.  The evaluate_candidate function writes
+    ``evaluation/<task>/trajectory.json``, so we mirror those files into
+    the ``traces/`` directory so the proposer can actually find them.
+    """
+    traces_dir = candidate_dir / "traces"
+    traces_dir.mkdir(exist_ok=True)
+    eval_dir = candidate_dir / "evaluation"
+    if not eval_dir.exists():
+        return
+    for task_dir in eval_dir.iterdir():
+        if not task_dir.is_dir():
+            continue
+        traj = task_dir / "trajectory.json"
+        if traj.exists():
+            dest = traces_dir / f"{task_dir.name}.json"
+            dest.write_text(traj.read_text())
 
 
 def _cleanup_proposer_files(candidate_dir: Path) -> None:

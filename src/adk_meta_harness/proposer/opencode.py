@@ -34,7 +34,7 @@ class OpenCodeProposer(CodingAgentCLIProposer):
             "run",
             *self.cli_args,
             "--dir",
-            str(candidate_dir),
+            str(candidate_dir.resolve()),
         ]
         cmd.append(instruction)
         return cmd

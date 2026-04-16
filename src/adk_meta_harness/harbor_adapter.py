@@ -19,13 +19,14 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
-from adk_meta_harness.trace.atif import AtifTrajectory
+from adk_meta_harness.trace.atif import AtifStep, AtifTrajectory
 from adk_meta_harness.trace.harbor_reward import HarborReward, parse_reward_dir
 from adk_meta_harness.trace.otel_to_atif import OtelToAtifConverter
 
@@ -112,17 +113,13 @@ class EvalOutput:
     def search_score(self) -> float:
         if not self.search_results:
             return 0.0
-        return sum(1 for r in self.search_results if r.passed) / len(
-            self.search_results
-        )
+        return sum(1 for r in self.search_results if r.passed) / len(self.search_results)
 
     @property
     def holdout_score(self) -> float:
         if not self.holdout_results:
             return self.search_score
-        return sum(1 for r in self.holdout_results if r.passed) / len(
-            self.holdout_results
-        )
+        return sum(1 for r in self.holdout_results if r.passed) / len(self.holdout_results)
 
     @property
     def combined_score(self) -> float:
@@ -200,6 +197,7 @@ async def evaluate_candidate(
             task_name=task_name,
             timeout=timeout,
             work_dir=work_dir,
+            task_logs_dir=task_logs_dir,
         )
 
         # Persist trajectory and last agent response for test scripts.
@@ -357,7 +355,18 @@ def _ensure_importable(candidate_dir: Path) -> None:
 
     This function creates __init__.py if missing and patches agent.py
     to add a ``root_agent`` alias if the module uses ``agent`` instead.
+
+    It also adds the candidate directory to sys.path so that
+    sub-packages (e.g. tools/, skills/) can be imported with
+    absolute imports like ``from tools import ...``.
     """
+    import sys
+
+    candidate_dir = candidate_dir.resolve()
+    candidate_str = str(candidate_dir)
+    if candidate_str not in sys.path:
+        sys.path.insert(0, candidate_str)
+
     init_path = candidate_dir / "__init__.py"
     if not init_path.exists():
         init_path.write_text("")
@@ -410,10 +419,7 @@ def _load_adk_agent(
         root_agent = agent_or_app
         app = App(name=agent_name, root_agent=root_agent)
     else:
-        msg = (
-            f"Expected BaseAgent or App from {candidate_dir}, "
-            f"got {type(agent_or_app)}"
-        )
+        msg = f"Expected BaseAgent or App from {candidate_dir}, got {type(agent_or_app)}"
         raise TypeError(msg)
 
     if not getattr(root_agent, "model", None):
@@ -470,6 +476,135 @@ def _read_instruction(task_path: Path) -> str:
     return ""
 
 
+_OTEL_CAPTURE_EXPORTER = None
+_OTEL_CAPTURE_PROVIDER = None
+
+
+def _ensure_otel_capture() -> tuple[Any | None, Any | None]:
+    """Ensure an in-memory OTel span capture pipeline is available.
+
+    Returns (exporter, provider). If OpenTelemetry SDK is unavailable,
+    returns (None, None).
+    """
+    global _OTEL_CAPTURE_EXPORTER, _OTEL_CAPTURE_PROVIDER
+
+    if _OTEL_CAPTURE_EXPORTER is not None and _OTEL_CAPTURE_PROVIDER is not None:
+        return _OTEL_CAPTURE_EXPORTER, _OTEL_CAPTURE_PROVIDER
+
+    try:
+        from opentelemetry import trace
+        from opentelemetry.sdk.trace import TracerProvider as SDKTracerProvider
+        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
+    except Exception:
+        return None, None
+
+    exporter = InMemorySpanExporter()
+    provider = trace.get_tracer_provider()
+
+    if not isinstance(provider, SDKTracerProvider):
+        try:
+            provider = SDKTracerProvider()
+            trace.set_tracer_provider(provider)
+        except Exception:
+            return None, None
+
+    if not hasattr(provider, "add_span_processor"):
+        return None, None
+
+    try:
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+    except Exception:
+        return None, None
+    _OTEL_CAPTURE_EXPORTER = exporter
+    _OTEL_CAPTURE_PROVIDER = provider
+    return exporter, provider
+
+
+def _readable_span_to_dict(span: Any) -> dict[str, Any]:
+    """Convert an OpenTelemetry ReadableSpan into a dict for converter."""
+    attrs = {}
+    for k, v in dict(getattr(span, "attributes", {}) or {}).items():
+        attrs[str(k)] = _normalize_otel_value(v)
+
+    span_id = ""
+    parent_span_id = ""
+    context = getattr(span, "context", None)
+    if context is not None and getattr(context, "span_id", None) is not None:
+        span_id = format(context.span_id, "x")
+
+    parent = getattr(span, "parent", None)
+    if parent is not None and getattr(parent, "span_id", None) is not None:
+        parent_span_id = format(parent.span_id, "x")
+
+    return {
+        "span_id": span_id,
+        "parent_span_id": parent_span_id,
+        "start_time": int(getattr(span, "start_time", 0) or 0),
+        "name": str(getattr(span, "name", "")),
+        "attributes": attrs,
+    }
+
+
+def _normalize_otel_value(value: Any) -> Any:
+    """Normalize OTel attribute values into JSON-serializable primitives."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, bytes):
+        return value.decode(errors="replace")
+    if isinstance(value, dict):
+        return {str(k): _normalize_otel_value(v) for k, v in value.items()}
+    if isinstance(value, Iterable) and not isinstance(value, (str, bytes)):
+        return [_normalize_otel_value(v) for v in value]
+    return str(value)
+
+
+def _load_collector_span_file(task_logs_dir: Path, task_name: str) -> Path | None:
+    """Locate collector-exported OTel span file for a task, if present."""
+    env_dir = os.getenv("AMH_OTEL_SPANS_DIR", "").strip()
+    env_file = os.getenv("AMH_OTEL_SPANS_FILE", "").strip()
+
+    candidates = [
+        task_logs_dir / "agent" / "otel_spans.json",
+        task_logs_dir / "otel_spans.json",
+    ]
+    if env_dir:
+        candidates.append(Path(env_dir) / f"{task_name}.json")
+    if env_file:
+        candidates.append(Path(env_file))
+
+    for path in candidates:
+        if path.exists() and path.is_file():
+            return path
+    return None
+
+
+def _ensure_user_instruction_step(
+    trajectory: AtifTrajectory,
+    instruction: str,
+) -> AtifTrajectory:
+    """Ensure the trajectory includes the user task input as a user step."""
+    prompt = instruction.strip()
+    if not prompt:
+        return trajectory
+
+    for step in trajectory.steps:
+        if step.source == "user" and step.message.strip() == prompt:
+            return trajectory
+
+    user_step = AtifStep(
+        step_id="step-user-input",
+        timestamp="",
+        source="user",
+        message=prompt,
+    )
+    trajectory.steps = [user_step, *trajectory.steps]
+    trajectory.compute_final_metrics()
+    return trajectory
+
+
 async def _run_agent_on_task(
     agent,
     app,
@@ -478,67 +613,104 @@ async def _run_agent_on_task(
     task_name: str,
     timeout: int,
     work_dir: Path | None = None,
+    task_logs_dir: Path | None = None,
 ) -> EvalResult:
     """Run an ADK agent on a single task and collect ATIF trajectory.
 
-    Captures the full event stream and converts to ATIF format.
-    Falls back to Harbor reward files for scoring.
+    Preferred trace path: OTel spans → ATIF.
+    Fallback trace path: ADK event stream → ATIF.
     """
+    from google.adk.runners import Runner
+    from google.adk.sessions import InMemorySessionService
+    from google.genai import types
+
+    run_error: Exception | None = None
+    events = []
+
+    exporter, provider = _ensure_otel_capture()
+    if exporter is not None:
+        exporter.clear()
+
+    session_service = InMemorySessionService()
+    runner = Runner(
+        app=app,
+        session_service=session_service,
+    )
+
+    # Create session before running
+    await session_service.create_session(
+        app_name=getattr(app, "name", "adk-meta-harness"),
+        user_id="meta_harness",
+        session_id=task_name,
+    )
+
+    content = types.Content(parts=[types.Part(text=instruction)], role="user")
+
+    previous_cwd = Path.cwd()
+    if work_dir is not None:
+        work_dir.mkdir(parents=True, exist_ok=True)
+        os.chdir(work_dir)
     try:
-        from google.adk.runners import Runner
-        from google.adk.sessions import InMemorySessionService
-        from google.genai import types
-
-        session_service = InMemorySessionService()
-        runner = Runner(
-            app=app,
-            session_service=session_service,
-        )
-
-        # Create session before running
-        await session_service.create_session(
-            app_name=getattr(app, "name", "adk-meta-harness"),
+        async for event in runner.run_async(
             user_id="meta_harness",
             session_id=task_name,
-        )
-
-        content = types.Content(parts=[types.Part(text=instruction)], role="user")
-        events = []
-
-        previous_cwd = Path.cwd()
+            new_message=content,
+        ):
+            events.append(event)
+    except Exception as e:
+        run_error = e
+    finally:
         if work_dir is not None:
-            work_dir.mkdir(parents=True, exist_ok=True)
-            os.chdir(work_dir)
-        try:
-            async for event in runner.run_async(
-                user_id="meta_harness",
-                session_id=task_name,
-                new_message=content,
-            ):
-                events.append(event)
-        finally:
-            if work_dir is not None:
-                os.chdir(previous_cwd)
+            os.chdir(previous_cwd)
 
-        # Convert ADK events to ATIF trajectory
+    # Prefer collector-exported span file when available.
+    trajectory: AtifTrajectory | None = None
+    span_file = None
+    if task_logs_dir is not None:
+        span_file = _load_collector_span_file(task_logs_dir, task_name)
+    if span_file is not None:
+        try:
+            trajectory = converter.convert_file(span_file)
+        except Exception:
+            trajectory = None
+
+    # Otherwise, use in-memory OTel capture from this run.
+    if trajectory is None and exporter is not None:
+        try:
+            if provider is not None and hasattr(provider, "force_flush"):
+                provider.force_flush()
+            spans = [_readable_span_to_dict(s) for s in exporter.get_finished_spans()]
+            if spans:
+                trajectory = converter.convert_spans(spans)
+        except Exception:
+            trajectory = None
+
+    # Final fallback: convert ADK events directly.
+    if trajectory is None:
         trajectory = converter.adk_events_to_atif(
             events,
             agent_name=getattr(agent, "name", "adk-agent"),
             model_name=getattr(agent, "model", ""),
         )
 
-        return EvalResult(
-            task_name=task_name,
-            passed=False,
-            score=0.0,
-            trajectory=trajectory,
-        )
+    # Ensure user instruction is present for judges/proposers.
+    trajectory = _ensure_user_instruction_step(trajectory, instruction)
 
-    except Exception as e:
-        return EvalResult(
-            task_name=task_name,
-            passed=False,
-            score=0.0,
-            trajectory=None,
-            error=str(e),
+    if run_error and not trajectory.steps:
+        trajectory.steps.append(
+            AtifStep(
+                step_id="step-error",
+                timestamp="",
+                source="system",
+                message=f"Run error: {run_error}",
+            )
         )
+        trajectory.compute_final_metrics()
+
+    return EvalResult(
+        task_name=task_name,
+        passed=False,
+        score=0.0,
+        trajectory=trajectory,
+        error=str(run_error) if run_error else None,
+    )
