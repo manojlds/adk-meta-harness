@@ -1,3 +1,23 @@
+"""Harbor agent that runs an ADK harness inside a Docker container.
+
+The base Docker image (``adk-meta-harness``) has Python, google-adk, and
+adk-meta-harness pre-installed.  The harness files (agent.py, config.yaml,
+system_prompt.md, etc.) are uploaded into ``/app/harness/`` inside the
+container during ``setup()``.
+
+On ``run()`` we execute::
+
+    python -m adk_meta_harness.eval_one \\
+        --harness /app/harness \\
+        --instruction "<instruction>" \\
+        --output /logs/agent \\
+        --model <model>
+
+The ``eval_one`` module loads the ADK agent, runs it on the single
+instruction, sets up a ``FileSpanExporter`` to capture OTel spans,
+and writes ``trajectory.json`` + ``response.txt`` to ``/logs/agent/``.
+"""
+
 from __future__ import annotations
 
 import json
@@ -13,23 +33,8 @@ from harbor.environments.base import BaseEnvironment
 class AdkHarborAgent(BaseAgent):
     """Harbor agent that runs an ADK harness inside the container.
 
-    The base Docker image (``adk-meta-harness``) has Python, google-adk,
-    and adk-meta-harness pre-installed.  The harness files (agent.py,
-    config.yaml, system_prompt.md, tools/, etc.) are uploaded into
-    ``/app/harness/`` inside the container.
-
-    On ``setup()`` the harness files are uploaded.
-
-    On ``run()`` we execute::
-
-        python -m adk_meta_harness.eval_one \\
-            --harness /app/harness \\
-            --instruction "<instruction>" \\
-            --output /logs/agent \\
-            --model <model>
-
-    The ``eval_one`` module runs the agent on a single instruction and
-    writes ``trajectory.json`` + ``response.txt`` to ``/logs/agent/``.
+    Uses the ``eval_one`` CLI module which handles agent loading, OTel
+    span capture via ``FileSpanExporter``, and ATIF trajectory conversion.
     """
 
     SUPPORTS_ATIF: bool = True
@@ -38,31 +43,24 @@ class AdkHarborAgent(BaseAgent):
         self,
         logs_dir: Path,
         model_name: str | None = None,
-        harness_dir: str | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(logs_dir=logs_dir, model_name=model_name, **kwargs)
-        self._harness_dir = harness_dir or os.environ.get("AMH_HARNESS_DIR", "/app/harness")
+        self._harness_dir = os.environ.get("AMH_HARNESS_DIR", "/app/harness")
 
     @staticmethod
     def name() -> str:
         return "adk-meta-harness"
 
-    def version(self) -> str | None:
-        try:
-            from importlib.metadata import version as pkg_version
-
-            return pkg_version("adk-meta-harness")
-        except Exception:
-            return None
-
     async def setup(self, environment: BaseEnvironment) -> None:
+        await environment.exec("mkdir -p /app/harness", user="root")
         harness_src = Path(self._harness_dir)
-        if not harness_src.exists():
-            harness_src = Path(os.environ.get("AMH_HARNESS_SRC", ""))
         if harness_src.exists():
-            await environment.exec("mkdir -p /app/harness", user="root")
             environment.upload_dir(str(harness_src), "/app/harness")
+
+    @staticmethod
+    def get_version_command() -> str | None:
+        return "python -c \"from importlib.metadata import version; print(version('adk-meta-harness'))\""
 
     async def run(
         self,

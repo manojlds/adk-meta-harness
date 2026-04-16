@@ -9,7 +9,7 @@ Model precedence:
     --model CLI flag (runtime override) > config.yaml (harness) > agent default
 
 Trace pipeline:
-    ADK Agent emits OTel spans → OTel Collector exports to file → ATIF
+    ADK Agent → OTel SDK → FileSpanExporter → otel_spans.json → ATIF
     Harbor verifier → reward.txt/reward.json → HarborReward
     (or) Judge → JudgeResult → score
 """
@@ -531,12 +531,35 @@ async def _run_agent_on_task(
 ) -> EvalResult:
     """Run an ADK agent on a single task and collect ATIF trajectory.
 
-    Trace collection uses the OTel Collector file exclusively:
-    ADK Agent → OTel Collector → otel_spans.json → OtelToAtifConverter → ATIF
+    Trace collection uses a FileSpanExporter that writes OTel spans to a
+    per-task JSON file. The agent emits spans via the OTel SDK; the
+    exporter captures them and writes to disk on flush.
+
+    Pipeline:
+        ADK Agent → OTel SDK → FileSpanExporter → otel_spans.json → ATIF
     """
     from google.adk.runners import Runner
     from google.adk.sessions import InMemorySessionService
     from google.genai import types
+
+    from adk_meta_harness.trace.file_exporter import (
+        FileSpanExporter,
+        setup_file_exporter,
+        teardown_file_exporter,
+    )
+
+    # Determine where to write OTel spans for this task.
+    span_output_path: Path | None = None
+    if task_logs_dir is not None:
+        span_output_path = task_logs_dir / "agent" / "otel_spans.json"
+
+    # Set up the per-task file exporter.
+    exporter: FileSpanExporter | None = None
+    if span_output_path is not None:
+        try:
+            exporter = setup_file_exporter(span_output_path)
+        except Exception:
+            exporter = None
 
     run_error: Exception | None = None
 
@@ -546,7 +569,6 @@ async def _run_agent_on_task(
         session_service=session_service,
     )
 
-    # Create session before running
     await session_service.create_session(
         app_name=getattr(app, "name", "adk-meta-harness"),
         user_id="meta_harness",
@@ -572,15 +594,23 @@ async def _run_agent_on_task(
         if work_dir is not None:
             os.chdir(previous_cwd)
 
-    # Read collector-exported OTel span file.
+    # Flush OTel spans to file and tear down the processor.
+    if exporter is not None:
+        try:
+            teardown_file_exporter(exporter)
+        except Exception:
+            pass
+
+    # Read the span file back.
     trajectory: AtifTrajectory | None = None
+    span_file = None
     if task_logs_dir is not None:
         span_file = _load_collector_span_file(task_logs_dir, task_name)
-        if span_file is not None:
-            try:
-                trajectory = converter.convert_file(span_file)
-            except Exception:
-                trajectory = None
+    if span_file is not None:
+        try:
+            trajectory = converter.convert_file(span_file)
+        except Exception:
+            trajectory = None
 
     if trajectory is None:
         trajectory = AtifTrajectory(
