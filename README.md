@@ -14,7 +14,7 @@ Follows the [Meta-Harness](https://arxiv.org/abs/2603.28052) paper.
 │                                                          │
 │  ┌──────────┐    ┌──────────┐    ┌──────┐   ┌────────┐ │
 │  │ Proposer │───►│ Evaluate │───►│ Gate │──►│ Learn  │ │
-│  │ (CLI)   │    │ (Harbor) │    │      │   │ (.md)  │ │
+│  │ (CLI)   │    │ (Runner) │    │      │   │ (.md)  │ │
 │  └──────────┘    └──────────┘    └──────┘   └────────┘ │
 │       ▲                              │                   │
 │       │         kept ────────────────┘                   │
@@ -27,7 +27,7 @@ Follows the [Meta-Harness](https://arxiv.org/abs/2603.28052) paper.
 
 1. **Propose** — A coding agent CLI (OpenCode, Pi) reads the filesystem of all
    prior candidates, traces, and scores, then proposes one targeted harness change.
-2. **Evaluate** — The proposed harness runs on Harbor tasks (search + holdout sets).
+2. **Evaluate** — The proposed harness runs on tasks (search + holdout sets).
 3. **Gate** — Keep only if holdout improves. Discard otherwise.
 4. **Learn** — Accumulated insights are written to `learnings.md` for the next iteration.
 5. **Repeat** — Continue the loop.
@@ -80,10 +80,14 @@ The optimizer runs your agent on Harbor tasks. Each task is a directory containi
 my-tasks/
 ├── task-001/
 │   ├── instruction.md    # Task instruction
-│   └── test.sh           # Verification script (Harbor)
+│   ├── environment/
+│   │   └── Dockerfile     # Task environment (Docker)
+│   ├── fixtures/           # Files copied into the work directory
+│   └── tests/
+│       └── test.sh         # Verification script (Harbor)
 ├── task-002/
 │   ├── instruction.md
-│   └── test.sh
+│   └── ...
 └── ...
 ```
 
@@ -113,19 +117,24 @@ examples/deep-research/initial_harness/
 ### 2. Run the optimization loop
 
 ```bash
-# Using the amh alias (recommended)
+# Local runner (default) — agent runs in-process
 amh optimize \
-  --dataset path/to/harbor/tasks \
+  --dataset examples/vanilla/tasks \
   --initial-harness examples/vanilla/initial_harness \
   --proposer opencode \
-  --iterations 10
+  --proposer-model opencode-go/glm-5.1 \
+  --model openai/glm-5.1 \
+  --iterations 10 \
+  --candidates-dir ./candidates/vanilla
 
-# Or using the full command name
-adk-meta-harness optimize \
-  --dataset path/to/harbor/tasks \
+# Harbor runner — agent runs inside Docker containers
+amh optimize \
+  --dataset examples/vanilla/tasks \
   --initial-harness examples/vanilla/initial_harness \
   --proposer opencode \
-  --iterations 10
+  --runner harbor \
+  --iterations 10 \
+  --candidates-dir ./candidates/vanilla
 ```
 
 ### 3. What happens during optimization
@@ -144,12 +153,16 @@ candidates/
 │   │   │   └── reward.json
 │   │   └── task-002/
 │   │       └── ...
-│   └── .candidate_meta.json  # Score, diff, kept/discarded
+│   ├── traces/                # Mirrored from evaluation/ for proposer
+│   │   ├── task-001.json
+│   │   └── task-002.json
+│   └── .candidate_meta.json   # Score, diff, kept/discarded
 ├── v0001/                    # Iteration 1 — proposer edits this
 │   ├── agent.py              # Proposer may have modified this
-│   ├── system_prompt.md      # Or this
+│   ├── system_prompt.md       # Or this
 │   ├── skills/               # Or added skills
 │   ├── evaluation/
+│   ├── traces/
 │   └── .candidate_meta.json
 ├── results.tsv               # Running score history
 └── learnings.md              # Accumulated proposer insights
@@ -170,9 +183,58 @@ Each iteration:
 ### 4. Evaluate a single candidate manually
 
 ```bash
+# Local runner
 amh eval \
   --candidate candidates/v0002 \
-  --dataset path/to/harbor/tasks
+  --dataset examples/vanilla/tasks \
+  --model openai/glm-5.1
+
+# Harbor runner
+amh eval \
+  --candidate candidates/v0002 \
+  --dataset examples/vanilla/tasks \
+  --runner harbor
+```
+
+## Runners
+
+Task evaluation can run in two modes:
+
+| Runner | Flag | Description |
+|---|---|---|
+| Local | `--runner local` (default) | Agent runs in-process. No containers. Uses `os.chdir` for isolation. Verifier scripts run as local subprocesses. |
+| Harbor | `--runner harbor` | Each task runs in its own Docker container. Agent executes inside the container. Full filesystem and network isolation. Verifier runs inside the container. |
+
+### Local runner
+
+The default. No Docker required. The ADK agent runs in the current Python process
+with `os.chdir(work_dir)` as the only isolation. Verifier scripts (`tests/test.sh`)
+run as local subprocesses with `LOGS_DIR` and `AGENT_RESPONSE_FILE` env vars.
+
+Best for: development, fast iteration, trusted tasks.
+
+### Harbor runner
+
+Each task gets its own Docker container built from the task's `environment/Dockerfile`.
+The base image `adk-meta-harness:latest` has Python, google-adk, and adk-meta-harness
+pre-installed. Task Dockerfiles should use `FROM adk-meta-harness:latest` and add
+only task-specific files:
+
+```dockerfile
+# examples/vanilla/tasks/read-file/read-file/environment/Dockerfile
+FROM adk-meta-harness:latest
+COPY fixtures/ /app/
+```
+
+The harness is uploaded into `/app/harness/` inside the container, and the agent
+runs via the `AdkHarborAgent` (Harbor `BaseAgent` subclass).
+
+Best for: final evaluation, untrusted tasks, CI/CD, reproducibility.
+
+### Building the base image
+
+```bash
+docker build -t adk-meta-harness:latest -f docker/adk-meta-harness.Dockerfile .
 ```
 
 ## Model precedence
@@ -181,7 +243,7 @@ Models are resolved in this order:
 
 | Priority | Source | Example |
 |---|---|---|
-| 1 (highest) | `--model` CLI flag | `amh optimize --model openai/glm-5` |
+| 1 (highest) | `--model` CLI flag | `amh optimize --model openai/glm-5.1` |
 | 2 | `config.yaml` in the harness | `model: gemini-2.5-flash` |
 | 3 (lowest) | Agent default | `Agent(model="gemini-2.5-flash")` |
 
@@ -216,7 +278,7 @@ The proposer is pluggable. Currently supported:
 You can set a proposer model separately from the agent model:
 
 ```bash
-amh optimize --proposer opencode --proposer-model openai/glm-5 --model openai/glm-5
+amh optimize --proposer opencode --proposer-model opencode-go/glm-5.1 --model openai/glm-5.1
 ```
 
 ## Judges
@@ -247,6 +309,69 @@ amh optimize --judge adk --judge-model gemini-2.5-flash ...
 amh optimize --judge opencode ...
 ```
 
+## Trace pipeline
+
+All trace collection uses a single path — a per-task `FileSpanExporter` that
+captures OTel spans emitted by the ADK agent and writes them to a JSON file:
+
+```
+ADK Agent (emits OTel spans via Python SDK)
+       │
+       ▼
+FileSpanExporter (SimpleSpanProcessor, per-task)
+       │
+       ▼
+evaluation/<task>/agent/otel_spans.json
+       │
+       ▼
+OtelToAtifConverter.convert_file()
+       │
+       ▼
+AtifTrajectory
+       │
+       ├── evaluation/<task>/trajectory.json
+       └── traces/<task>.json  (mirrored for proposer access)
+```
+
+### How it works
+
+1. **Before agent run** — `setup_file_exporter()` creates a `FileSpanExporter`
+   pointing to `evaluation/<task>/agent/otel_spans.json` and registers a
+   `SimpleSpanProcessor` with the global OTel `TracerProvider`.
+2. **During agent run** — ADK emits spans through the standard OTel Python SDK.
+   The `SimpleSpanProcessor` synchronously exports each span to the
+   `FileSpanExporter`, which accumulates them in memory.
+3. **After agent run** — `teardown_file_exporter()` flushes all accumulated
+   spans to the JSON file and removes the processor from the provider.
+4. **On read** — `_load_collector_span_file()` locates the file, then
+   `OtelToAtifConverter.convert_file()` parses the OTel spans into an ATIF
+   trajectory.
+
+If no OTel spans are captured (e.g., the agent doesn't emit them), the trajectory
+is created with only agent metadata (name, model). The `_ensure_user_instruction_step()`
+function prepends the task instruction as a user step so judges and proposers
+always see the full conversation.
+
+### In Harbor containers
+
+The same `FileSpanExporter` approach is used inside containers by `eval_one.py`.
+The `AdkHarborAgent` shells out to:
+
+```bash
+python -m adk_meta_harness.eval_one \
+    --harness /app/harness \
+    --instruction "..." \
+    --output /logs/agent \
+    --model openai/glm-5.1
+```
+
+`eval_one` loads the ADK agent, sets up the `FileSpanExporter`, runs the agent,
+flushes spans to `/logs/agent/otel_spans.json`, converts to ATIF, and writes
+`trajectory.json` and `response.txt`.
+
+No separate OTel Collector process is needed — the `FileSpanExporter` writes
+directly to disk within the same Python process.
+
 ## CLI reference
 
 ```
@@ -255,6 +380,7 @@ amh optimize \
   --initial-harness PATH   # Initial harness directory (required)
   --proposer [opencode|pi] # Proposer CLI (default: opencode)
   --proposer-model MODEL   # Model override for proposer
+  --runner [local|harbor]  # Task runner (default: local)
   --judge [litellm|adk|opencode|pi|custom] # Judge backend (default: litellm)
   --judge-model MODEL      # Model for the judge (e.g. openai/glm-5)
   --model MODEL            # Model override for ADK agent (highest priority)
@@ -265,31 +391,13 @@ amh optimize \
 
 amh eval \
   --candidate PATH         # Harness candidate directory (required)
-  --dataset PATH           # Harbor task directory (required)
+  --dataset PATH            # Harbor task directory (required)
+  --runner [local|harbor]   # Task runner (default: local)
   --judge [litellm|adk|opencode|pi|custom] # Judge backend (default: litellm)
-  --judge-model MODEL      # Model for the judge
-  --model MODEL            # Model override for ADK agent
-  --timeout SECS           # Per-task timeout in seconds (default: 300)
+  --judge-model MODEL       # Model for the judge
+  --model MODEL             # Model override for ADK agent
+  --timeout SECS            # Per-task timeout in seconds (default: 300)
 ```
-
-## Trace pipeline
-
-```
-ADK Agent (OTel spans)
-        │
-        ▼
-OtelToAtifConverter
-        │
-        ▼
-AtifTrajectory (JSON)
-        │
-        ▼
-candidates/vNNNN/evaluation/task-001/trajectory.json
-```
-
-ATIF (Agent Trajectory Interchange Format) v1.4 captures per-step tool calls,
-arguments, observations, and token metrics. Harbor reward files (`reward.txt`,
-`reward.json`) provide pass/fail scoring.
 
 ## Project structure
 
@@ -301,7 +409,14 @@ adk-meta-harness/
 │   ├── candidate.py             # Candidate harness representation
 │   ├── gate.py                  # Holdout evaluation + keep/discard
 │   ├── learnings.py             # learnings.md accumulator
-│   ├── harbor_adapter.py        # Harbor ADK agent runner, model precedence
+│   ├── eval_one.py              # Single-task evaluator for Harbor containers
+│   ├── harbor_adapter.py        # ADK agent runner, model precedence, task discovery
+│   ├── runner/
+│   │   ├── __init__.py           # get_runner() factory
+│   │   ├── base.py              # TaskRunner protocol
+│   │   ├── local.py             # LocalTaskRunner (in-process)
+│   │   ├── harbor_runner.py     # HarborTaskRunner (Docker containers)
+│   │   └── harbor_agent.py      # AdkHarborAgent (BaseAgent for Harbor)
 │   ├── proposer/
 │   │   ├── base.py              # ProposerProtocol
 │   │   ├── coding_agent_cli.py  # Generic CLI adapter + PROPOSER template
@@ -314,15 +429,19 @@ adk-meta-harness/
 │   │   └── cli_judge.py         # CLI-based judge
 │   └── trace/
 │       ├── atif.py              # ATIF v1.4 data models
-│       ├── otel_to_atif.py      # OTel spans → ATIF, ADK events → ATIF
+│       ├── otel_to_atif.py      # OTel spans → ATIF conversion
+│       ├── file_exporter.py     # FileSpanExporter for per-task OTel span capture
 │       └── harbor_reward.py     # reward.txt / reward.json parsing
+├── docker/
+│   └── adk-meta-harness.Dockerfile  # Base Docker image for Harbor runner
 ├── examples/
 │   ├── vanilla/                 # Minimal baseline agent
 │   ├── skills-enabled/          # Agent with adk-skills
 │   ├── tool-search/             # Agent with adk-tool-search
 │   └── deep-research/           # Agent with skills + tool search
-├── PROPOSER.md                  # Template proposer directive
-├── .env.example                 # Environment variable template
+├── tests/                        # 142 tests
+├── PROPOSER.md                   # Template proposer directive
+├── .env.example                  # Environment variable template
 └── pyproject.toml               # Package config, amh entry point
 ```
 
