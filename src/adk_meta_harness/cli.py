@@ -93,6 +93,12 @@ def main() -> None:
         default=300,
         help="Timeout per task in seconds (default: 300)",
     )
+    opt.add_argument(
+        "--runner",
+        default="local",
+        choices=["local", "harbor"],
+        help="Task runner: local (in-process) or harbor (Docker containers, default: local)",
+    )
 
     # eval subcommand
     ev = subparsers.add_parser("eval", help="Evaluate a single harness candidate")
@@ -133,6 +139,12 @@ def main() -> None:
         default=300,
         help="Timeout per task in seconds (default: 300)",
     )
+    ev.add_argument(
+        "--runner",
+        default="local",
+        choices=["local", "harbor"],
+        help="Task runner: local (in-process) or harbor (Docker containers, default: local)",
+    )
 
     args = parser.parse_args()
 
@@ -153,6 +165,7 @@ def main() -> None:
             candidates_dir=args.candidates_dir,
             timeout=args.timeout,
             judge=judge,
+            runner=args.runner,
         )
         result = asyncio.run(optimize(config))
         print("\nOptimization complete!")
@@ -162,13 +175,14 @@ def main() -> None:
         print(f"Iterations: {result.iterations_completed}")
 
     elif args.command == "eval":
-        from adk_meta_harness.harbor_adapter import evaluate_candidate
         from adk_meta_harness.judge import get_judge
+        from adk_meta_harness.runner import get_runner
 
         judge = get_judge(args.judge, model=args.judge_model)
+        task_runner = get_runner(args.runner)
 
         eval_output = asyncio.run(
-            evaluate_candidate(
+            task_runner.evaluate(
                 candidate_dir=args.candidate,
                 tasks_dir=args.dataset,
                 model=args.model,
@@ -179,7 +193,7 @@ def main() -> None:
         all_results = eval_output.search_results + eval_output.holdout_results
         passed = sum(1 for r in all_results if r.passed)
         total = len(all_results)
-        print(f"\nResults: {passed}/{total} passed ({passed/total:.1%})")
+        print(f"\nResults: {passed}/{total} passed ({passed / total:.1%})")
         for r in all_results:
             status = "PASS" if r.passed else "FAIL"
             print(f"  [{status}] {r.task_name}")

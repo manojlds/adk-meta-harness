@@ -23,7 +23,6 @@ from adk_meta_harness.candidate import (
     init_candidates_dir,
 )
 from adk_meta_harness.gate import gate_decision
-from adk_meta_harness.harbor_adapter import evaluate_candidate
 from adk_meta_harness.learnings import Learnings
 from adk_meta_harness.proposer import get_proposer
 
@@ -43,6 +42,8 @@ class OptimizeConfig:
     candidates_dir: Path | None = None
     judge: JudgeProtocol | None = None
     timeout: int = 300
+    runner: str = "local"
+    runner_kwargs: dict | None = None
 
 
 @dataclass
@@ -67,6 +68,9 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
     candidates_dir = config.candidates_dir or config.dataset / "candidates"
     candidates_dir.mkdir(parents=True, exist_ok=True)
 
+    from adk_meta_harness.runner import get_runner
+
+    task_runner = get_runner(config.runner, **(config.runner_kwargs or {}))
     proposer = get_proposer(config.proposer, model=config.proposer_model)
     learnings = Learnings(candidates_dir / "learnings.md")
 
@@ -75,7 +79,7 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
     print(f"[v{baseline.version}] Baseline harness initialized")
 
     # Evaluate baseline
-    eval_output = await evaluate_candidate(
+    eval_output = await task_runner.evaluate(
         candidate_dir=baseline.path,
         tasks_dir=config.dataset,
         model=config.model,
@@ -147,7 +151,7 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
         _cleanup_proposer_files(new_candidate.path)
 
         # Evaluate the proposed harness
-        eval_output = await evaluate_candidate(
+        eval_output = await task_runner.evaluate(
             candidate_dir=new_candidate.path,
             tasks_dir=config.dataset,
             model=config.model,
