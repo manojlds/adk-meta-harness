@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 
@@ -10,7 +9,6 @@ from adk_meta_harness.harbor_adapter import (
     _discover_tasks,
     _ensure_importable,
     _ensure_user_instruction_step,
-    _normalize_otel_value,
     _read_instruction,
     _resolve_task_path,
 )
@@ -116,29 +114,6 @@ class TestReadInstruction:
 
         result = _read_instruction(task_dir)
         assert result == ""
-
-
-class TestNormalizeOtelValue:
-    def test_primitives(self):
-        assert _normalize_otel_value(None) is None
-        assert _normalize_otel_value("hello") == "hello"
-        assert _normalize_otel_value(42) == 42
-        assert _normalize_otel_value(3.14) == 3.14
-        assert _normalize_otel_value(True) is True
-
-    def test_bytes(self):
-        assert _normalize_otel_value(b"hello") == "hello"
-
-    def test_list(self):
-        assert _normalize_otel_value([1, 2, 3]) == [1, 2, 3]
-
-    def test_nested_dict(self):
-        result = _normalize_otel_value({"key": {"nested": True}})
-        assert result == {"key": {"nested": True}}
-
-    def test_mixed_iterable(self):
-        result = _normalize_otel_value([1, "two", b"three"])
-        assert result == [1, "two", "three"]
 
 
 class TestEnsureUserInstructionStep:

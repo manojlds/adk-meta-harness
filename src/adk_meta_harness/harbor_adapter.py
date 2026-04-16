@@ -9,7 +9,7 @@ Model precedence:
     --model CLI flag (runtime override) > config.yaml (harness) > agent default
 
 Trace pipeline:
-    ADK Agent (OTel spans) → OtelToAtifConverter → AtifTrajectory → trajectory.json
+    ADK Agent emits OTel spans → OTel Collector exports to file → ATIF
     Harbor verifier → reward.txt/reward.json → HarborReward
     (or) Judge → JudgeResult → score
 """
@@ -19,14 +19,13 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import yaml
 
-from adk_meta_harness.trace.atif import AtifStep, AtifTrajectory
+from adk_meta_harness.trace.atif import AtifAgent, AtifStep, AtifTrajectory
 from adk_meta_harness.trace.harbor_reward import HarborReward, parse_reward_dir
 from adk_meta_harness.trace.otel_to_atif import OtelToAtifConverter
 
@@ -476,91 +475,6 @@ def _read_instruction(task_path: Path) -> str:
     return ""
 
 
-_OTEL_CAPTURE_EXPORTER = None
-_OTEL_CAPTURE_PROVIDER = None
-
-
-def _ensure_otel_capture() -> tuple[Any | None, Any | None]:
-    """Ensure an in-memory OTel span capture pipeline is available.
-
-    Returns (exporter, provider). If OpenTelemetry SDK is unavailable,
-    returns (None, None).
-    """
-    global _OTEL_CAPTURE_EXPORTER, _OTEL_CAPTURE_PROVIDER
-
-    if _OTEL_CAPTURE_EXPORTER is not None and _OTEL_CAPTURE_PROVIDER is not None:
-        return _OTEL_CAPTURE_EXPORTER, _OTEL_CAPTURE_PROVIDER
-
-    try:
-        from opentelemetry import trace
-        from opentelemetry.sdk.trace import TracerProvider as SDKTracerProvider
-        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
-            InMemorySpanExporter,
-        )
-    except Exception:
-        return None, None
-
-    exporter = InMemorySpanExporter()
-    provider = trace.get_tracer_provider()
-
-    if not isinstance(provider, SDKTracerProvider):
-        try:
-            provider = SDKTracerProvider()
-            trace.set_tracer_provider(provider)
-        except Exception:
-            return None, None
-
-    if not hasattr(provider, "add_span_processor"):
-        return None, None
-
-    try:
-        provider.add_span_processor(SimpleSpanProcessor(exporter))
-    except Exception:
-        return None, None
-    _OTEL_CAPTURE_EXPORTER = exporter
-    _OTEL_CAPTURE_PROVIDER = provider
-    return exporter, provider
-
-
-def _readable_span_to_dict(span: Any) -> dict[str, Any]:
-    """Convert an OpenTelemetry ReadableSpan into a dict for converter."""
-    attrs = {}
-    for k, v in dict(getattr(span, "attributes", {}) or {}).items():
-        attrs[str(k)] = _normalize_otel_value(v)
-
-    span_id = ""
-    parent_span_id = ""
-    context = getattr(span, "context", None)
-    if context is not None and getattr(context, "span_id", None) is not None:
-        span_id = format(context.span_id, "x")
-
-    parent = getattr(span, "parent", None)
-    if parent is not None and getattr(parent, "span_id", None) is not None:
-        parent_span_id = format(parent.span_id, "x")
-
-    return {
-        "span_id": span_id,
-        "parent_span_id": parent_span_id,
-        "start_time": int(getattr(span, "start_time", 0) or 0),
-        "name": str(getattr(span, "name", "")),
-        "attributes": attrs,
-    }
-
-
-def _normalize_otel_value(value: Any) -> Any:
-    """Normalize OTel attribute values into JSON-serializable primitives."""
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    if isinstance(value, bytes):
-        return value.decode(errors="replace")
-    if isinstance(value, dict):
-        return {str(k): _normalize_otel_value(v) for k, v in value.items()}
-    if isinstance(value, Iterable) and not isinstance(value, (str, bytes)):
-        return [_normalize_otel_value(v) for v in value]
-    return str(value)
-
-
 def _load_collector_span_file(task_logs_dir: Path, task_name: str) -> Path | None:
     """Locate collector-exported OTel span file for a task, if present."""
     env_dir = os.getenv("AMH_OTEL_SPANS_DIR", "").strip()
@@ -617,19 +531,14 @@ async def _run_agent_on_task(
 ) -> EvalResult:
     """Run an ADK agent on a single task and collect ATIF trajectory.
 
-    Preferred trace path: OTel spans → ATIF.
-    Fallback trace path: ADK event stream → ATIF.
+    Trace collection uses the OTel Collector file exclusively:
+    ADK Agent → OTel Collector → otel_spans.json → OtelToAtifConverter → ATIF
     """
     from google.adk.runners import Runner
     from google.adk.sessions import InMemorySessionService
     from google.genai import types
 
     run_error: Exception | None = None
-    events = []
-
-    exporter, provider = _ensure_otel_capture()
-    if exporter is not None:
-        exporter.clear()
 
     session_service = InMemorySessionService()
     runner = Runner(
@@ -651,46 +560,34 @@ async def _run_agent_on_task(
         work_dir.mkdir(parents=True, exist_ok=True)
         os.chdir(work_dir)
     try:
-        async for event in runner.run_async(
+        async for _ in runner.run_async(
             user_id="meta_harness",
             session_id=task_name,
             new_message=content,
         ):
-            events.append(event)
+            pass
     except Exception as e:
         run_error = e
     finally:
         if work_dir is not None:
             os.chdir(previous_cwd)
 
-    # Prefer collector-exported span file when available.
+    # Read collector-exported OTel span file.
     trajectory: AtifTrajectory | None = None
-    span_file = None
     if task_logs_dir is not None:
         span_file = _load_collector_span_file(task_logs_dir, task_name)
-    if span_file is not None:
-        try:
-            trajectory = converter.convert_file(span_file)
-        except Exception:
-            trajectory = None
+        if span_file is not None:
+            try:
+                trajectory = converter.convert_file(span_file)
+            except Exception:
+                trajectory = None
 
-    # Otherwise, use in-memory OTel capture from this run.
-    if trajectory is None and exporter is not None:
-        try:
-            if provider is not None and hasattr(provider, "force_flush"):
-                provider.force_flush()
-            spans = [_readable_span_to_dict(s) for s in exporter.get_finished_spans()]
-            if spans:
-                trajectory = converter.convert_spans(spans)
-        except Exception:
-            trajectory = None
-
-    # Final fallback: convert ADK events directly.
     if trajectory is None:
-        trajectory = converter.adk_events_to_atif(
-            events,
-            agent_name=getattr(agent, "name", "adk-agent"),
-            model_name=getattr(agent, "model", ""),
+        trajectory = AtifTrajectory(
+            agent=AtifAgent(
+                name=getattr(agent, "name", "adk-agent"),
+                model_name=getattr(agent, "model", ""),
+            ),
         )
 
     # Ensure user instruction is present for judges/proposers.
