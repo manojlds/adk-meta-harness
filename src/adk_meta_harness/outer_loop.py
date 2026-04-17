@@ -25,6 +25,7 @@ from adk_meta_harness.candidate import (
 from adk_meta_harness.gate import gate_decision
 from adk_meta_harness.learnings import Learnings
 from adk_meta_harness.proposer import get_proposer
+from adk_meta_harness.validate import validate_candidate
 
 if TYPE_CHECKING:
     from adk_meta_harness.judge.base import JudgeProtocol
@@ -149,6 +150,47 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
 
         # Clear proposer-injected files from the candidate before eval
         _cleanup_proposer_files(new_candidate.path)
+
+        # Validate candidate before expensive evaluation
+        validation = validate_candidate(new_candidate.path)
+        if not validation.valid:
+            print("  Validation FAILED:")
+            for err in validation.errors:
+                print(f"    {err}")
+            new_candidate.diff = CandidateDiff(
+                creation_path=new_candidate.path,
+                score=0.0,
+                holdout_score=0.0,
+                search_score=0.0,
+                passed=0,
+                total=0,
+                description=f"Validation failed: {'; '.join(validation.errors[:3])}",
+                kept=False,
+            )
+            new_candidate.write_meta()
+            _append_results(candidates_dir, new_candidate.diff)
+            learnings.add(
+                iteration=iteration,
+                description=f"VALIDATION FAILED: {'; '.join(validation.errors[:3])}",
+                kept=False,
+                holdout_score=0.0,
+                search_score=0.0,
+                failure_patterns=[f"validation: {e}" for e in validation.errors],
+            )
+            shutil.rmtree(new_candidate.path, ignore_errors=True)
+            all_results.append(
+                {
+                    "combined": 0.0,
+                    "search": 0.0,
+                    "holdout": 0.0,
+                    "passed": 0,
+                    "total": 0,
+                }
+            )
+            continue
+        if validation.warnings:
+            for warn in validation.warnings:
+                print(f"  Validation warning: {warn}")
 
         # Evaluate the proposed harness
         eval_output = await task_runner.evaluate(
