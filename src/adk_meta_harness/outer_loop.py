@@ -256,8 +256,9 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
             best_holdout = proposed_holdout
             best_search = proposed_search
         else:
-            # Remove the discarded candidate directory
-            shutil.rmtree(new_candidate.path, ignore_errors=True)
+            # Keep discarded candidates on disk so the proposer can
+            # learn from failed attempts (traces, diffs, scores).
+            pass
 
         all_results.append(proposed_score)
 
