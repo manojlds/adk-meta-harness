@@ -24,6 +24,9 @@ def main() -> None:
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
+    judge_help = (
+        "Judge backend: litellm, adk, opencode, pi, or a custom CLI command (default: litellm)"
+    )
 
     # optimize subcommand
     opt = subparsers.add_parser("optimize", help="Run the optimization loop")
@@ -80,7 +83,7 @@ def main() -> None:
     opt.add_argument(
         "--judge",
         default="litellm",
-        help="Judge backend: litellm, adk, opencode, pi, or a custom CLI command (default: litellm)",
+        help=judge_help,
     )
     opt.add_argument(
         "--judge-model",
@@ -117,7 +120,7 @@ def main() -> None:
     ev.add_argument(
         "--judge",
         default="litellm",
-        help="Judge backend: litellm, adk, opencode, pi, or a custom CLI command (default: litellm)",
+        help=judge_help,
     )
     ev.add_argument(
         "--judge-model",
@@ -149,8 +152,8 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "optimize":
-        from adk_meta_harness.outer_loop import OptimizeConfig, optimize
         from adk_meta_harness.judge import get_judge
+        from adk_meta_harness.outer_loop import OptimizeConfig, optimize
 
         judge = get_judge(args.judge, model=args.judge_model)
 

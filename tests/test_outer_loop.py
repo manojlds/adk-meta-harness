@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
-from adk_meta_harness.gate import GateResult
+from adk_meta_harness.learnings import Learnings
 from adk_meta_harness.outer_loop import (
     _build_proposer_instruction,
     _cleanup_proposer_files,
@@ -15,7 +14,6 @@ from adk_meta_harness.outer_loop import (
     _extract_failure_patterns,
     _link_traces_to_candidate,
 )
-from adk_meta_harness.learnings import Learnings
 
 
 class TestComputeScore:

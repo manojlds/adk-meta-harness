@@ -3,8 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from adk_meta_harness.proposer.coding_agent_cli import (
     CodingAgentCLIProposer,
     _compute_diff_summary,
@@ -53,7 +51,7 @@ class TestOpenCodeProposerBuildCommand:
 
 class TestProposeEditRetryLogic:
     def test_retry_on_no_edit(self, tmp_path):
-        proposer = CodingAgentCLIProposer(
+        CodingAgentCLIProposer(
             cli_command="echo",
             cli_args=[],
             prompt_mode="argv",

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import pytest
 
 from adk_meta_harness.trace.otel_to_atif import OtelToAtifConverter
 

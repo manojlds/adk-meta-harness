@@ -35,9 +35,7 @@ def test_learnings_add():
 def test_learnings_persistence():
     path = Path(tempfile.mktemp(suffix=".md"))
     learnings = Learnings(path)
-    learnings.add(
-        iteration=1, description="test1", kept=True, holdout_score=0.5, search_score=0.6
-    )
+    learnings.add(iteration=1, description="test1", kept=True, holdout_score=0.5, search_score=0.6)
     learnings.add(
         iteration=2, description="test2", kept=False, holdout_score=0.45, search_score=0.55
     )

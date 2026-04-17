@@ -27,7 +27,6 @@ from typing import Any
 from adk_meta_harness.trace.atif import (
     AtifAgent,
     AtifMetrics,
-    AtifObservation,
     AtifStep,
     AtifToolCall,
     AtifTrajectory,

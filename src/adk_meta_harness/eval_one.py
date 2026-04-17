@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from contextlib import suppress
 from pathlib import Path
 
 from google.adk.runners import Runner
@@ -97,10 +98,8 @@ def main() -> None:
 
     # Flush spans to file.
     if exporter is not None:
-        try:
+        with suppress(Exception):
             teardown_file_exporter(exporter)
-        except Exception:
-            pass
 
     # Convert OTel spans → ATIF trajectory.
     converter = OtelToAtifConverter()
@@ -142,9 +141,9 @@ def main() -> None:
 
 
 def _load_agent(candidate_dir: Path, model: str) -> tuple:
+    from google.adk.agents.base_agent import BaseAgent
     from google.adk.apps.app import App
     from google.adk.cli.utils.agent_loader import AgentLoader
-    from google.adk.agents.base_agent import BaseAgent
 
     parent_dir = str(candidate_dir.parent)
     agent_name = candidate_dir.name

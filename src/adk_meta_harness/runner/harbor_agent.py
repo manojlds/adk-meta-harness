@@ -26,7 +26,7 @@ import shlex
 from pathlib import Path
 from typing import Any
 
-from harbor.agents.base import BaseAgent, AgentContext
+from harbor.agents.base import AgentContext, BaseAgent
 from harbor.environments.base import BaseEnvironment
 
 
@@ -60,7 +60,10 @@ class AdkHarborAgent(BaseAgent):
 
     @staticmethod
     def get_version_command() -> str | None:
-        return "python -c \"from importlib.metadata import version; print(version('adk-meta-harness'))\""
+        return (
+            'python -c "from importlib.metadata import version; '
+            "print(version('adk-meta-harness'))\""
+        )
 
     async def run(
         self,

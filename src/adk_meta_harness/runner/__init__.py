@@ -18,8 +18,8 @@ def get_runner(name: str, **kwargs) -> TaskRunner:
 
 
 __all__ = [
-    "LocalTaskRunner",
     "RUNNERS",
+    "LocalTaskRunner",
     "TaskRunner",
     "get_runner",
 ]

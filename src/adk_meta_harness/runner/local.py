@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from adk_meta_harness.harbor_adapter import evaluate_candidate
+from adk_meta_harness.harbor_adapter import EvalOutput, evaluate_candidate
 from adk_meta_harness.judge.base import JudgeProtocol
-from adk_meta_harness.runner.base import TaskRunner
 
 
 class LocalTaskRunner:
@@ -35,8 +34,7 @@ class LocalTaskRunner:
         search_task_names: list[str] | None = None,
         holdout_task_names: list[str] | None = None,
         judge: JudgeProtocol | None = None,
-    ) -> "EvalOutput":
-        from adk_meta_harness.harbor_adapter import EvalOutput
+    ) -> EvalOutput:
 
         return await evaluate_candidate(
             candidate_dir=candidate_dir,

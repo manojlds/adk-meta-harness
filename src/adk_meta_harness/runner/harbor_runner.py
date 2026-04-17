@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import os
+from contextlib import suppress
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from harbor import (
     AgentConfig,
@@ -66,7 +67,6 @@ class HarborTaskRunner:
         judge: JudgeProtocol | None = None,
     ) -> EvalOutput:
         all_tasks = _discover_tasks(tasks_dir)
-        search_set = search_task_names or [t for t in all_tasks]
         holdout_set = holdout_task_names or []
 
         output = EvalOutput()
@@ -130,10 +130,8 @@ class HarborTaskRunner:
             trial_dir = Path(trial_result.trial_uri)
             traj_file = trial_dir / "agent" / "trajectory.json"
             if traj_file.exists():
-                try:
+                with suppress(Exception):
                     trajectory = AtifTrajectory.from_json_file(traj_file)
-                except Exception:
-                    pass
 
         reward = 0.0
         passed = False

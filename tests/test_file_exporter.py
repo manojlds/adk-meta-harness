@@ -1,7 +1,6 @@
 """Tests for FileSpanExporter and setup/teardown helpers."""
 
 import json
-from pathlib import Path
 from unittest.mock import MagicMock
 
 from adk_meta_harness.trace.file_exporter import (

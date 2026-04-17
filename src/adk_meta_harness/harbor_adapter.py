@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -174,7 +175,6 @@ async def evaluate_candidate(
     converter = OtelToAtifConverter()
 
     all_tasks = _discover_tasks(tasks_dir)
-    search_set = search_task_names or [t for t in all_tasks]
     holdout_set = holdout_task_names or []
 
     output = EvalOutput()
@@ -444,10 +444,12 @@ def _discover_tasks(tasks_dir: Path) -> list[str]:
         if not d.is_dir():
             continue
         # Check flat structure: tasks_dir/task-name/instruction.md
-        if (d / "instruction.md").exists() or (d / "task.toml").exists():
-            tasks.append(d.name)
+        flat_has_task = (d / "instruction.md").exists() or (d / "task.toml").exists()
         # Check nested structure: tasks_dir/task-name/task-name/instruction.md
-        elif (d / d.name / "instruction.md").exists() or (d / d.name / "task.toml").exists():
+        nested_has_task = (d / d.name / "instruction.md").exists() or (
+            d / d.name / "task.toml"
+        ).exists()
+        if flat_has_task or nested_has_task:
             tasks.append(d.name)
     return tasks
 
@@ -596,10 +598,8 @@ async def _run_agent_on_task(
 
     # Flush OTel spans to file and tear down the processor.
     if exporter is not None:
-        try:
+        with suppress(Exception):
             teardown_file_exporter(exporter)
-        except Exception:
-            pass
 
     # Read the span file back.
     trajectory: AtifTrajectory | None = None

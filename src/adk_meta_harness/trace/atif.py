@@ -127,11 +127,7 @@ class AtifStep:
     def from_dict(cls, data: dict[str, Any]) -> AtifStep:
         tool_calls = [AtifToolCall.from_dict(tc) for tc in data.get("tool_calls", [])]
         observation_data = data.get("observation")
-        observation = (
-            AtifObservation.from_dict(observation_data)
-            if observation_data
-            else None
-        )
+        observation = AtifObservation.from_dict(observation_data) if observation_data else None
         metrics_data = data.get("metrics")
         metrics = AtifMetrics.from_dict(metrics_data) if metrics_data else None
         return cls(
@@ -229,15 +225,11 @@ class AtifTrajectory:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AtifTrajectory:
         agent_data = data.get("agent")
-        agent = (
-            AtifAgent.from_dict(agent_data) if agent_data else None
-        )
+        agent = AtifAgent.from_dict(agent_data) if agent_data else None
         steps = [AtifStep.from_dict(s) for s in data.get("steps", [])]
         final_metrics_data = data.get("final_metrics")
         final_metrics = (
-            AtifFinalMetrics.from_dict(final_metrics_data)
-            if final_metrics_data
-            else None
+            AtifFinalMetrics.from_dict(final_metrics_data) if final_metrics_data else None
         )
         return cls(
             schema_version=data.get("schema_version", "ATIF-v1.4"),
