@@ -72,6 +72,25 @@ class Learnings:
         self.entries.append(entry)
         self._write()
 
+    def completed_iterations(self) -> int:
+        """Return the number of completed iterations recorded in learnings.
+
+        Each iteration (kept, discarded, or validation-failed) writes an
+        entry.  This is the most reliable count because it includes
+        validation-failed iterations whose candidate dirs were deleted
+        and excludes interrupted iterations that never finished.
+
+        The baseline (iteration 0) is not counted.
+        """
+        import re
+
+        count = 0
+        for entry in self.entries:
+            m = re.match(r"## Iteration (\d+)", entry)
+            if m and int(m.group(1)) > 0:
+                count += 1
+        return count
+
     def get_content(self) -> str:
         """Get the full learnings content for the proposer."""
         return self.path.read_text() if self.path.exists() else ""

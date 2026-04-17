@@ -20,7 +20,10 @@ from adk_meta_harness.candidate import (
     Candidate,
     CandidateDiff,
     create_candidate,
+    discover_candidates,
+    find_best_candidate,
     init_candidates_dir,
+    max_version,
 )
 from adk_meta_harness.gate import gate_decision
 from adk_meta_harness.learnings import Learnings
@@ -60,6 +63,11 @@ class OptimizeResult:
 async def optimize(config: OptimizeConfig) -> OptimizeResult:
     """Run the meta-harness optimization loop.
 
+    Supports resuming a crashed or interrupted run.  If candidates_dir
+    already contains evaluated candidates with ``meta.json``, the loop
+    picks up from the last completed iteration instead of re-running
+    the baseline and prior iterations.
+
     Args:
         config: Optimization configuration.
 
@@ -75,57 +83,100 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
     proposer = get_proposer(config.proposer, model=config.proposer_model)
     learnings = Learnings(candidates_dir / "learnings.md")
 
-    # Initialize baseline candidate
-    baseline = init_candidates_dir(candidates_dir, config.initial_harness)
-    print(f"[v{baseline.version}] Baseline harness initialized")
+    # --- Resume detection ---
+    existing = discover_candidates(candidates_dir)
+    resumed = False
+    start_iteration = 1
 
-    # Evaluate baseline
-    eval_output = await task_runner.evaluate(
-        candidate_dir=baseline.path,
-        tasks_dir=config.dataset,
-        model=config.model,
-        timeout=config.timeout,
-        judge=config.judge,
-    )
-    search_results = eval_output.search_results
-    holdout_results = eval_output.holdout_results
+    if existing:
+        best_prior = find_best_candidate(existing)
+        if best_prior is not None and best_prior.diff is not None:
+            # We have evaluated candidates — resume from here.
+            best_candidate = best_prior
+            best_holdout = best_prior.diff.holdout_score or 0.0
+            best_search = best_prior.diff.search_score or 0.0
+            # Use learnings.md as the source of truth for completed
+            # iterations.  It includes validation-failed iterations
+            # (whose dirs are deleted) and excludes interrupted ones
+            # (that never wrote a learning entry).
+            completed = learnings.completed_iterations()
+            start_iteration = completed + 1
+            # Collect score dicts for already-completed candidates.
+            all_results = []
+            for c in existing:
+                if c.diff is not None and c.diff.kept is not None:
+                    all_results.append(
+                        {
+                            "combined": c.diff.score or 0.0,
+                            "search": c.diff.search_score or 0.0,
+                            "holdout": c.diff.holdout_score or 0.0,
+                            "passed": c.diff.passed,
+                            "total": c.diff.total,
+                        }
+                    )
+            resumed = True
+            print(
+                f"Resuming from iteration {start_iteration} "
+                f"({completed} prior iterations found, "
+                f"best v{best_candidate.version} "
+                f"holdout={best_holdout:.4f})"
+            )
 
-    baseline_score = _compute_score(search_results, holdout_results)
-    search_score = baseline_score.get("search", 0.0)
-    holdout_score = baseline_score.get("holdout", search_score)
+    if not resumed:
+        # Fresh run — initialize baseline candidate
+        baseline = init_candidates_dir(candidates_dir, config.initial_harness)
+        print(f"[v{baseline.version}] Baseline harness initialized")
 
-    baseline.diff = CandidateDiff(
-        creation_path=baseline.path,
-        score=baseline_score["combined"],
-        holdout_score=holdout_score,
-        search_score=search_score,
-        passed=baseline_score["passed"],
-        total=baseline_score["total"],
-        description="Initial baseline",
-        kept=True,
-    )
-    baseline.write_meta()
-    _link_traces_to_candidate(baseline.path)
-    _append_results(candidates_dir, baseline.diff)
-    learnings.add(
-        iteration=0,
-        description="Baseline evaluation",
-        kept=True,
-        holdout_score=holdout_score,
-        search_score=search_score,
-        failure_patterns=_extract_failure_patterns(search_results),
-    )
+        # Evaluate baseline
+        eval_output = await task_runner.evaluate(
+            candidate_dir=baseline.path,
+            tasks_dir=config.dataset,
+            model=config.model,
+            timeout=config.timeout,
+            judge=config.judge,
+        )
+        search_results = eval_output.search_results
+        holdout_results = eval_output.holdout_results
 
-    best_candidate = baseline
-    best_holdout = holdout_score
-    best_search = search_score
+        baseline_score = _compute_score(search_results, holdout_results)
+        search_score = baseline_score.get("search", 0.0)
+        holdout_score = baseline_score.get("holdout", search_score)
 
-    all_results = [baseline_score]
+        baseline.diff = CandidateDiff(
+            creation_path=baseline.path,
+            score=baseline_score["combined"],
+            holdout_score=holdout_score,
+            search_score=search_score,
+            passed=baseline_score["passed"],
+            total=baseline_score["total"],
+            description="Initial baseline",
+            kept=True,
+        )
+        baseline.write_meta()
+        _link_traces_to_candidate(baseline.path)
+        _append_results(candidates_dir, baseline.diff)
+        learnings.add(
+            iteration=0,
+            description="Baseline evaluation",
+            kept=True,
+            holdout_score=holdout_score,
+            search_score=search_score,
+            failure_patterns=_extract_failure_patterns(search_results),
+        )
 
-    for iteration in range(1, config.iterations + 1):
+        best_candidate = baseline
+        best_holdout = holdout_score
+        best_search = search_score
+        all_results = [baseline_score]
+
+    # Determine the next version number (may be non-contiguous after
+    # prior runs with discarded candidates).
+    next_version = max_version(existing) + 1 if existing else 1
+
+    for iteration in range(start_iteration, config.iterations + 1):
         print(f"\n=== Iteration {iteration}/{config.iterations} ===")
 
-        new_version = baseline.version + iteration
+        new_version = next_version + (iteration - start_iteration)
         new_candidate = create_candidate(
             candidates_dir=candidates_dir,
             source=best_candidate.path,

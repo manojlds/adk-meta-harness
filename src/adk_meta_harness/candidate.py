@@ -159,6 +159,52 @@ def create_candidate(
     return candidate
 
 
+def discover_candidates(candidates_dir: Path) -> list[Candidate]:
+    """Discover and load all existing candidates from a candidates directory.
+
+    Scans for directories matching the ``vNNNN`` naming convention that
+    contain a ``meta.json`` file.  Returns candidates sorted by version
+    number (ascending).
+    """
+    if not candidates_dir.exists():
+        return []
+    candidates = []
+    for entry in sorted(candidates_dir.iterdir()):
+        if (
+            entry.is_dir()
+            and entry.name.startswith(CANDIDATE_DIR_PREFIX)
+            and (entry / "meta.json").exists()
+        ):
+            try:
+                candidates.append(Candidate.load_meta(entry))
+            except Exception:
+                continue
+    return candidates
+
+
+def find_best_candidate(candidates: list[Candidate]) -> Candidate | None:
+    """Find the best kept candidate by holdout score.
+
+    Ties are broken by preferring the newest (highest version) candidate.
+    This preserves the gate's "equal holdout but simpler" improvement:
+    a newer candidate with the same holdout was only kept because the
+    gate found it simpler, so it should remain the best on resume.
+
+    Returns None if no candidates have been evaluated and kept.
+    """
+    kept = [c for c in candidates if c.diff is not None and c.diff.kept]
+    if not kept:
+        return None
+    return max(kept, key=lambda c: (c.diff.holdout_score or 0.0, c.version))
+
+
+def max_version(candidates: list[Candidate]) -> int:
+    """Return the highest version number across all candidates."""
+    if not candidates:
+        return -1
+    return max(c.version for c in candidates)
+
+
 def init_candidates_dir(candidates_dir: Path, initial_harness: Path) -> Candidate:
     candidates_dir.mkdir(parents=True, exist_ok=True)
     (candidates_dir / "traces").mkdir(exist_ok=True)
