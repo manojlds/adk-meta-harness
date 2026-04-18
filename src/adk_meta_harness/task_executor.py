@@ -19,15 +19,20 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
-import subprocess
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import yaml
 
-from adk_meta_harness.task import TaskConfig, discover_tasks, read_instruction, resolve_task_path
+from adk_meta_harness.task import (
+    DEFAULT_AGENT_TIMEOUT_SEC,
+    TaskConfig,
+    discover_tasks,
+    read_instruction,
+    resolve_task_path,
+)
 from adk_meta_harness.trace.atif import AtifAgent, AtifStep, AtifTrajectory
 from adk_meta_harness.trace.otel_to_atif import OtelToAtifConverter
 from adk_meta_harness.trace.reward import Reward, parse_reward_dir
@@ -135,7 +140,7 @@ async def evaluate_candidate(
     candidate_dir: Path,
     tasks_dir: Path,
     model: str | None = None,
-    timeout: int = 300,
+    timeout: int = DEFAULT_AGENT_TIMEOUT_SEC,
     search_task_names: list[str] | None = None,
     holdout_task_names: list[str] | None = None,
     output_dir: Path | None = None,
@@ -187,7 +192,7 @@ async def evaluate_candidate(
             continue
 
         task_to_run = task
-        if timeout != 300:
+        if timeout != DEFAULT_AGENT_TIMEOUT_SEC:
             task_to_run = replace(task, agent_timeout=timeout, verifier_timeout=timeout)
 
         result = await run_single_task(
@@ -233,7 +238,7 @@ async def run_single_task(
     result = EvalResult(task_name=task.name, passed=False, score=0.0)
     work_dir = prepare_workspace(task, task_logs_dir)
 
-    setup_error = run_setup(task, task_logs_dir, work_dir)
+    setup_error = await run_setup(task, task_logs_dir, work_dir)
     if setup_error:
         result.error = f"setup: {setup_error}"
     else:
@@ -253,7 +258,7 @@ async def run_single_task(
             result.trajectory.to_json_file(task_logs_dir / "trajectory.json")
         _write_agent_response(task_logs_dir, _extract_last_agent_message(result.trajectory))
 
-        verifier_error = run_verifier(task, task_logs_dir, work_dir)
+        verifier_error = await run_verifier(task, task_logs_dir, work_dir)
         if verifier_error:
             result.error = _merge_errors(result.error, f"verifier: {verifier_error}")
 
@@ -275,7 +280,7 @@ async def run_single_task(
             result.score = judge_result.score
             result.passed = judge_result.score >= 0.5
 
-    teardown_error = run_teardown(task, work_dir, task_logs_dir)
+    teardown_error = await run_teardown(task, work_dir, task_logs_dir)
     if teardown_error:
         result.error = _merge_errors(result.error, f"teardown: {teardown_error}")
 
@@ -344,7 +349,7 @@ def _write_agent_response(task_logs_dir: Path, response_text: str) -> None:
     (agent_dir / "response.txt").write_text(response_text or "")
 
 
-def run_setup(
+async def run_setup(
     task: TaskConfig,
     task_logs_dir: Path,
     work_dir: Path,
@@ -355,7 +360,7 @@ def run_setup(
     """
     if task.setup_script is None or not task.setup_script.exists():
         return None
-    return _run_script(
+    return await _run_script(
         script_path=task.setup_script,
         task=task,
         task_logs_dir=task_logs_dir,
@@ -365,7 +370,7 @@ def run_setup(
     )
 
 
-def run_verifier(
+async def run_verifier(
     task: TaskConfig,
     task_logs_dir: Path,
     work_dir: Path,
@@ -376,7 +381,7 @@ def run_verifier(
     """
     if task.verifier_script is None or not task.verifier_script.exists():
         return None
-    return _run_script(
+    return await _run_script(
         script_path=task.verifier_script,
         task=task,
         task_logs_dir=task_logs_dir,
@@ -386,7 +391,7 @@ def run_verifier(
     )
 
 
-def run_teardown(
+async def run_teardown(
     task: TaskConfig,
     work_dir: Path,
     task_logs_dir: Path,
@@ -394,7 +399,7 @@ def run_teardown(
     """Run scripts/teardown.sh if present."""
     if task.teardown_script is None or not task.teardown_script.exists():
         return None
-    return _run_script(
+    return await _run_script(
         script_path=task.teardown_script,
         task=task,
         task_logs_dir=task_logs_dir,
@@ -404,7 +409,7 @@ def run_teardown(
     )
 
 
-def _run_script(
+async def _run_script(
     script_path: Path,
     task: TaskConfig,
     task_logs_dir: Path,
@@ -412,27 +417,35 @@ def _run_script(
     timeout: int,
     step_name: str,
 ) -> str | None:
-    """Run one task lifecycle script and return an error on failure."""
+    """Run one task lifecycle script asynchronously and return an error on failure."""
     env = _build_script_env(task, task_logs_dir, work_dir)
 
     try:
-        proc = subprocess.run(
-            ["bash", str(script_path)],
+        proc = await asyncio.create_subprocess_exec(
+            "bash",
+            str(script_path),
             cwd=str(work_dir.resolve()),
             env=env,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
-    except subprocess.TimeoutExpired:
-        return f"{step_name} timed out after {timeout}s"
+
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except TimeoutError:
+            with suppress(ProcessLookupError):
+                proc.kill()
+            with suppress(Exception):
+                await proc.communicate()
+            return f"{step_name} timed out after {timeout}s"
     except Exception as exc:
         return f"{step_name} failed to start: {exc}"
 
     if proc.returncode == 0:
         return None
-    stderr = (proc.stderr or "").strip()
-    stdout = (proc.stdout or "").strip()
+
+    stderr = (stderr_bytes or b"").decode(errors="replace").strip()
+    stdout = (stdout_bytes or b"").decode(errors="replace").strip()
     msg = stderr or stdout or f"{step_name} exited with code {proc.returncode}"
     return msg[:1000]
 
@@ -600,6 +613,41 @@ def _ensure_user_instruction_step(
     return trajectory
 
 
+@contextmanager
+def _temporary_env(extra_env: dict[str, str] | None):
+    old_env: dict[str, str] = {}
+    created_env_keys: set[str] = set()
+
+    try:
+        for key, value in (extra_env or {}).items():
+            if key in os.environ:
+                old_env[key] = os.environ[key]
+            else:
+                created_env_keys.add(key)
+            os.environ[key] = value
+        yield
+    finally:
+        for key in created_env_keys:
+            os.environ.pop(key, None)
+        for key, value in old_env.items():
+            os.environ[key] = value
+
+
+@contextmanager
+def _temporary_cwd(work_dir: Path | None):
+    if work_dir is None:
+        yield
+        return
+
+    previous_cwd = Path.cwd()
+    work_dir.mkdir(parents=True, exist_ok=True)
+    os.chdir(work_dir)
+    try:
+        yield
+    finally:
+        os.chdir(previous_cwd)
+
+
 async def run_agent_on_task(
     agent,
     app,
@@ -659,39 +707,20 @@ async def run_agent_on_task(
 
     content = types.Content(parts=[types.Part(text=instruction)], role="user")
 
-    old_env: dict[str, str] = {}
-    created_env_keys: set[str] = set()
-    for key, value in (extra_env or {}).items():
-        if key in os.environ:
-            old_env[key] = os.environ[key]
-        else:
-            created_env_keys.add(key)
-        os.environ[key] = value
-
-    previous_cwd = Path.cwd()
-    if work_dir is not None:
-        work_dir.mkdir(parents=True, exist_ok=True)
-        os.chdir(work_dir)
     try:
+        with _temporary_env(extra_env), _temporary_cwd(work_dir):
 
-        async def _run() -> None:
-            async for _ in runner.run_async(
-                user_id="meta_harness",
-                session_id=task_name,
-                new_message=content,
-            ):
-                pass
+            async def _run() -> None:
+                async for _ in runner.run_async(
+                    user_id="meta_harness",
+                    session_id=task_name,
+                    new_message=content,
+                ):
+                    pass
 
-        await asyncio.wait_for(_run(), timeout=timeout)
+            await asyncio.wait_for(_run(), timeout=timeout)
     except Exception as e:
         run_error = e
-    finally:
-        if work_dir is not None:
-            os.chdir(previous_cwd)
-        for key in created_env_keys:
-            os.environ.pop(key, None)
-        for key, value in old_env.items():
-            os.environ[key] = value
 
     # Flush OTel spans to file and tear down the processor.
     if exporter is not None:

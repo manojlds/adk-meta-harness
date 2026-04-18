@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_AGENT_TIMEOUT_SEC = 300
 DEFAULT_VERIFIER_TIMEOUT_SEC = 300
@@ -109,12 +112,18 @@ def _has_task_files(task_path: Path) -> bool:
 def _load_task_toml(task_toml_path: Path) -> dict[str, Any]:
     if not task_toml_path.exists() or not task_toml_path.is_file():
         return {}
+
     try:
         data = tomllib.loads(task_toml_path.read_text())
-        if isinstance(data, dict):
-            return data
-    except Exception:
+    except tomllib.TOMLDecodeError as exc:
+        logger.warning("Failed to parse task TOML at %s: %s", task_toml_path, exc)
         return {}
+    except OSError as exc:
+        logger.warning("Failed to read task TOML at %s: %s", task_toml_path, exc)
+        return {}
+
+    if isinstance(data, dict):
+        return data
     return {}
 
 

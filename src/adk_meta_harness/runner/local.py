@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from adk_meta_harness.judge.base import JudgeProtocol
+from adk_meta_harness.task import DEFAULT_AGENT_TIMEOUT_SEC
 from adk_meta_harness.task_executor import EvalOutput, evaluate_candidate
 
 
@@ -13,8 +14,9 @@ class LocalTaskRunner:
     with ``os.chdir`` as the only isolation. Verifier scripts run as
     local subprocesses.
 
-    Tasks run sequentially because ``os.chdir`` is process-global —
-    concurrent tasks would clobber each other's working directory.
+    Tasks run sequentially because ``os.chdir`` and temporary
+    ``os.environ`` updates are process-global — concurrent tasks would
+    clobber each other's working directory and environment.
     For parallel execution, use the Temporal runner once enabled.
     """
 
@@ -31,7 +33,7 @@ class LocalTaskRunner:
         tasks_dir: Path,
         *,
         model: str | None = None,
-        timeout: int = 300,
+        timeout: int = DEFAULT_AGENT_TIMEOUT_SEC,
         search_task_names: list[str] | None = None,
         holdout_task_names: list[str] | None = None,
         judge: JudgeProtocol | None = None,

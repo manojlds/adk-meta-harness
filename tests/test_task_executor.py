@@ -1,13 +1,21 @@
 from __future__ import annotations
 
+import os
 import sys
 
+import pytest
+
+from adk_meta_harness.task import TaskConfig
 from adk_meta_harness.task_executor import (
     _discover_tasks,
     _ensure_importable,
     _ensure_user_instruction_step,
     _read_instruction,
     _resolve_task_path,
+    _temporary_cwd,
+    _temporary_env,
+    run_setup,
+    run_teardown,
 )
 from adk_meta_harness.trace.atif import AtifStep, AtifTrajectory
 
@@ -132,3 +140,77 @@ class TestEnsureUserInstructionStep:
         traj = AtifTrajectory(steps=[AtifStep(step_id="s1", source="agent", message="hi")])
         updated = _ensure_user_instruction_step(traj, "")
         assert len(updated.steps) == 1
+
+
+@pytest.mark.asyncio
+async def test_run_setup_executes_script_with_task_env(tmp_path):
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir(parents=True)
+    work_dir = tmp_path / "work"
+    work_dir.mkdir(parents=True)
+
+    setup_script = tmp_path / "setup.sh"
+    setup_script.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        'printf \'%s\' "$SETUP_FLAG" > "$WORK_DIR/from_setup.txt"\n'
+    )
+
+    task = TaskConfig(
+        name="sample",
+        path=tmp_path,
+        instruction="",
+        env={"SETUP_FLAG": "ok"},
+        setup_script=setup_script,
+    )
+
+    error = await run_setup(task, logs_dir, work_dir)
+
+    assert error is None
+    assert (work_dir / "from_setup.txt").read_text() == "ok"
+
+
+@pytest.mark.asyncio
+async def test_run_teardown_executes_script(tmp_path):
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir(parents=True)
+    work_dir = tmp_path / "work"
+    work_dir.mkdir(parents=True)
+
+    teardown_script = tmp_path / "teardown.sh"
+    teardown_script.write_text(
+        "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'done' > \"$LOGS_DIR/teardown_done.txt\"\n"
+    )
+
+    task = TaskConfig(
+        name="sample",
+        path=tmp_path,
+        instruction="",
+        teardown_script=teardown_script,
+    )
+
+    error = await run_teardown(task, work_dir, logs_dir)
+
+    assert error is None
+    assert (logs_dir / "teardown_done.txt").read_text() == "done"
+
+
+def test_temporary_env_restores_when_cwd_setup_fails(tmp_path):
+    key = "AMH_TEST_TEMP_ENV"
+    original = os.environ.get(key)
+    os.environ.pop(key, None)
+
+    bad_work_dir = tmp_path / "bad-work-dir"
+    bad_work_dir.write_text("not-a-directory")
+
+    with (
+        pytest.raises(FileExistsError),
+        _temporary_env({key: "temp"}),
+        _temporary_cwd(bad_work_dir),
+    ):
+        pass
+
+    if original is None:
+        assert key not in os.environ
+    else:
+        assert os.environ[key] == original
