@@ -12,13 +12,16 @@ dependencies = [
     "python-dotenv>=1.0",
     "pyyaml>=6.0",
     "rich>=13.0",
-    "temporalio>=1.9",
 ]
 
 [project.optional-dependencies]
 skills = [
     "adk-skills-agent>=0.1.0",
     "adk-tool-search>=0.1.0",
+]
+
+temporal = [
+    "temporalio>=1.9",
 ]
 
 dev = [

@@ -23,7 +23,6 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "pyyaml" },
     { name = "rich" },
-    { name = "temporalio" },
 ]
 
 [package.optional-dependencies]
@@ -36,6 +35,9 @@ dev = [
 skills = [
     { name = "adk-skills-agent" },
     { name = "adk-tool-search" },
+]
+temporal = [
+    { name = "temporalio" },
 ]
 
 [package.metadata]
@@ -51,9 +53,9 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "rich", specifier = ">=13.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
-    { name = "temporalio", specifier = ">=1.9" },
+    { name = "temporalio", marker = "extra == 'temporal'", specifier = ">=1.9" },
 ]
-provides-extras = ["skills", "dev"]
+provides-extras = ["skills", "temporal", "dev"]
 
 [[package]]
 name = "adk-skills-agent"

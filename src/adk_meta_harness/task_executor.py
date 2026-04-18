@@ -454,6 +454,7 @@ def _build_script_env(task: TaskConfig, task_logs_dir: Path, work_dir: Path) -> 
     logs_root = task_logs_dir.resolve()
     work_root = work_dir.resolve()
     env = os.environ.copy()
+    env.update(task.env)
     env.update(
         {
             "LOGS_DIR": str(logs_root),
@@ -463,7 +464,6 @@ def _build_script_env(task: TaskConfig, task_logs_dir: Path, work_dir: Path) -> 
             "WORK_DIR": str(work_root),
         }
     )
-    env.update(task.env)
     return env
 
 
@@ -615,6 +615,11 @@ def _ensure_user_instruction_step(
 
 @contextmanager
 def _temporary_env(extra_env: dict[str, str] | None):
+    """Temporarily set environment variables for local task execution.
+
+    Not thread-safe. This mutates ``os.environ`` which is process-global.
+    Do not use in concurrent runners.
+    """
     old_env: dict[str, str] = {}
     created_env_keys: set[str] = set()
 
@@ -635,6 +640,11 @@ def _temporary_env(extra_env: dict[str, str] | None):
 
 @contextmanager
 def _temporary_cwd(work_dir: Path | None):
+    """Temporarily change the current working directory.
+
+    Not thread-safe. This uses ``os.chdir`` which is process-global.
+    Do not use in concurrent runners.
+    """
     if work_dir is None:
         yield
         return

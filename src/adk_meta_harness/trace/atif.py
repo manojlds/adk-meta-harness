@@ -2,8 +2,6 @@
 
 Standardized JSON format for logging the complete interaction history of
 autonomous LLM agents. Based on ATIF-v1.4.
-
-Reference: https://harborframework.com/docs/atif
 """
 
 from __future__ import annotations

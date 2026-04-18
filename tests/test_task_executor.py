@@ -7,6 +7,7 @@ import pytest
 
 from adk_meta_harness.task import TaskConfig
 from adk_meta_harness.task_executor import (
+    _build_script_env,
     _discover_tasks,
     _ensure_importable,
     _ensure_user_instruction_step,
@@ -214,3 +215,32 @@ def test_temporary_env_restores_when_cwd_setup_fails(tmp_path):
         assert key not in os.environ
     else:
         assert os.environ[key] == original
+
+
+def test_build_script_env_infra_vars_override_task_env(tmp_path):
+    logs_dir = tmp_path / "logs"
+    work_dir = tmp_path / "work"
+    task = TaskConfig(
+        name="sample",
+        path=tmp_path,
+        instruction="",
+        env={
+            "LOGS_DIR": "bad-logs",
+            "REWARD_DIR": "bad-reward",
+            "AGENT_DIR": "bad-agent",
+            "AGENT_RESPONSE_FILE": "bad-response",
+            "WORK_DIR": "bad-work",
+            "CUSTOM_FLAG": "ok",
+        },
+    )
+
+    env = _build_script_env(task, logs_dir, work_dir)
+
+    logs_root = logs_dir.resolve()
+    work_root = work_dir.resolve()
+    assert env["LOGS_DIR"] == str(logs_root)
+    assert env["REWARD_DIR"] == str(logs_root / "verifier")
+    assert env["AGENT_DIR"] == str(logs_root / "agent")
+    assert env["AGENT_RESPONSE_FILE"] == str(logs_root / "agent" / "response.txt")
+    assert env["WORK_DIR"] == str(work_root)
+    assert env["CUSTOM_FLAG"] == "ok"
