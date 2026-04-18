@@ -1,6 +1,6 @@
 """Trace module — ATIF trajectory models and OTel conversion.
 
-ATIF (Agent Trajectory Interchange Format) is Harbor's standardized JSON
+ATIF (Agent Trajectory Interchange Format) is a standardized JSON
 format for logging agent execution traces. We use it as the canonical
 trace format that the proposer reads from prior candidates.
 
@@ -18,8 +18,8 @@ from adk_meta_harness.trace.atif import (
     AtifStep,
     AtifTrajectory,
 )
-from adk_meta_harness.trace.harbor_reward import parse_reward
 from adk_meta_harness.trace.otel_to_atif import OtelToAtifConverter
+from adk_meta_harness.trace.reward import parse_reward
 
 __all__ = [
     "AtifAgent",

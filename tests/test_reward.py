@@ -1,10 +1,10 @@
-"""Tests for Harbor reward parsing."""
+"""Tests for reward parsing."""
 
 import json
 import tempfile
 from pathlib import Path
 
-from adk_meta_harness.trace.harbor_reward import parse_reward, parse_reward_dir
+from adk_meta_harness.trace.reward import parse_reward, parse_reward_dir
 
 
 def test_parse_reward_txt_pass():

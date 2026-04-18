@@ -7,13 +7,9 @@ RUNNERS: dict[str, type[TaskRunner]] = {
 
 
 def get_runner(name: str, **kwargs) -> TaskRunner:
-    if name == "harbor":
-        from adk_meta_harness.runner.harbor_runner import HarborTaskRunner
-
-        return HarborTaskRunner(**kwargs)
     if name in RUNNERS:
         return RUNNERS[name](**kwargs)
-    msg = f"Unknown runner: {name!r}. Available: local, harbor"
+    msg = f"Unknown runner: {name!r}. Available: local"
     raise ValueError(msg)
 
 

@@ -34,7 +34,7 @@ def main() -> None:
         "--dataset",
         type=Path,
         required=True,
-        help="Path to Harbor task/dataset directory",
+        help="Path to task/dataset directory",
     )
     opt.add_argument(
         "--initial-harness",
@@ -99,8 +99,8 @@ def main() -> None:
     opt.add_argument(
         "--runner",
         default="local",
-        choices=["local", "harbor"],
-        help="Task runner: local (in-process) or harbor (Docker containers, default: local)",
+        choices=["local"],
+        help="Task runner (default: local)",
     )
 
     # eval subcommand
@@ -115,7 +115,7 @@ def main() -> None:
         "--dataset",
         type=Path,
         required=True,
-        help="Path to Harbor task/dataset directory",
+        help="Path to task/dataset directory",
     )
     ev.add_argument(
         "--judge",
@@ -145,8 +145,8 @@ def main() -> None:
     ev.add_argument(
         "--runner",
         default="local",
-        choices=["local", "harbor"],
-        help="Task runner: local (in-process) or harbor (Docker containers, default: local)",
+        choices=["local"],
+        help="Task runner (default: local)",
     )
 
     args = parser.parse_args()
@@ -156,6 +156,8 @@ def main() -> None:
         from adk_meta_harness.outer_loop import OptimizeConfig, optimize
 
         judge = get_judge(args.judge, model=args.judge_model)
+
+        runner_kwargs = {}
 
         config = OptimizeConfig(
             dataset=args.dataset,
@@ -169,6 +171,7 @@ def main() -> None:
             timeout=args.timeout,
             judge=judge,
             runner=args.runner,
+            runner_kwargs=runner_kwargs,
         )
         result = asyncio.run(optimize(config))
         print("\nOptimization complete!")

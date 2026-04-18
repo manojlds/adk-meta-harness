@@ -1,9 +1,7 @@
 """ATIF — Agent Trajectory Interchange Format.
 
-Harbor's standardized JSON format for logging the complete interaction
-history of autonomous LLM agents. Based on ATIF-v1.4.
-
-Reference: https://harborframework.com/docs/atif
+Standardized JSON format for logging the complete interaction history of
+autonomous LLM agents. Based on ATIF-v1.4.
 """
 
 from __future__ import annotations
