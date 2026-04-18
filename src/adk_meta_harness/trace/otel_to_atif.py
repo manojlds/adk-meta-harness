@@ -1,21 +1,21 @@
 """OTel → ATIF converter.
 
 Converts OpenTelemetry spans emitted by ADK into ATIF trajectories.
-Designed to run as a sidecar collector during Harbor evaluation runs.
+Designed to run during local task evaluation runs.
 
 Architecture:
-    ADK Agent (in Harbor container)
+    ADK Agent
         │
         ├── emits OTel spans (native ADK)
         │
         ▼
-    OTel Collector (sidecar)
+    OTel Collector / file exporter
         │
         ├── exports to Jaeger (dev observability)
         ├── converts → ATIF trajectory.json → /logs/agent/
         │
         ▼
-    Harbor verifier reads /logs/agent/trajectory.json
+    verifier reads /logs/agent/trajectory.json
 """
 
 from __future__ import annotations

@@ -1,34 +1,36 @@
-"""Harbor ADK adapter — runs an ADK agent on Harbor tasks.
+"""Task executor — runs an ADK agent on local tasks.
 
 Uses ADK's AgentLoader for agent discovery and ATIF for trace collection.
-For each task, this adapter runs task verification scripts (tests/test.sh)
-that write Harbor reward files, then parses those rewards. If no reward files
-are produced, it can fall back to a judge over ATIF trajectories.
+For each task, this executor runs lifecycle hooks and verification scripts
+that write reward files. If no reward files are produced, it can fall back to
+a judge over ATIF trajectories.
 
 Model precedence:
     --model CLI flag (runtime override) > config.yaml (harness) > agent default
 
 Trace pipeline:
     ADK Agent → OTel SDK → FileSpanExporter → otel_spans.json → ATIF
-    Harbor verifier → reward.txt/reward.json → HarborReward
+    verifier → reward.txt/reward.json → Reward
     (or) Judge → JudgeResult → score
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
 import subprocess
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import yaml
 
+from adk_meta_harness.task import TaskConfig, discover_tasks, read_instruction, resolve_task_path
 from adk_meta_harness.trace.atif import AtifAgent, AtifStep, AtifTrajectory
-from adk_meta_harness.trace.harbor_reward import HarborReward, parse_reward_dir
 from adk_meta_harness.trace.otel_to_atif import OtelToAtifConverter
+from adk_meta_harness.trace.reward import Reward, parse_reward_dir
 
 if TYPE_CHECKING:
     from adk_meta_harness.judge.base import JudgeProtocol
@@ -75,7 +77,7 @@ class EvalResult:
     passed: bool
     score: float
     trajectory: AtifTrajectory | None = None
-    reward: HarborReward | None = None
+    reward: Reward | None = None
     error: str | None = None
 
     @property
@@ -143,13 +145,13 @@ async def evaluate_candidate(
 
     Scoring logic:
     1. Run task verifier script (tests/test.sh) when present
-    2. If Harbor reward files (reward.txt/reward.json) exist, use them
+    2. If reward files (reward.txt/reward.json) exist, use them
     3. Else if a judge is provided, score the trajectory with the judge
     4. Else mark as failed (score 0.0)
 
     Args:
         candidate_dir: Path to the candidate harness directory.
-        tasks_dir: Path to Harbor task definitions.
+        tasks_dir: Path to task definitions.
         model: Runtime override for the model. If provided, writes to
             config.yaml before loading. If None, reads from config.yaml
             or uses the agent's default.
@@ -158,7 +160,7 @@ async def evaluate_candidate(
         holdout_task_names: Task names for the holdout set.
         output_dir: Directory to write trajectory.json and reward files.
             Defaults to candidate_dir / "evaluation".
-        judge: Optional judge for scoring traces when Harbor rewards absent.
+        judge: Optional judge for scoring traces when reward files are absent.
 
     Returns:
         EvalOutput with search and holdout results.
@@ -171,75 +173,35 @@ async def evaluate_candidate(
     output_dir = output_dir or candidate_dir / "evaluation"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    agent, app = _load_adk_agent(candidate_dir, resolved_model)
+    agent, app = load_adk_agent(candidate_dir, resolved_model)
     converter = OtelToAtifConverter()
 
-    all_tasks = _discover_tasks(tasks_dir)
-    holdout_set = holdout_task_names or []
+    all_tasks = discover_tasks(tasks_dir)
+    holdout_set = set(holdout_task_names or [])
+    search_set = set(search_task_names or [])
 
     output = EvalOutput()
 
-    for task_name in all_tasks:
-        task_path = _resolve_task_path(tasks_dir, task_name)
-        if not task_path.exists():
+    for task in all_tasks:
+        if search_set and task.name not in search_set and task.name not in holdout_set:
             continue
-        instruction = _read_instruction(task_path)
-        task_logs_dir = output_dir / task_name
-        task_logs_dir.mkdir(parents=True, exist_ok=True)
-        work_dir = _prepare_task_workspace(task_path, task_logs_dir)
 
-        result = await _run_agent_on_task(
+        task_to_run = task
+        if timeout != 300:
+            task_to_run = replace(task, agent_timeout=timeout, verifier_timeout=timeout)
+
+        result = await run_single_task(
+            task=task_to_run,
+            candidate_dir=candidate_dir,
+            model=resolved_model,
+            output_dir=output_dir,
+            judge=judge,
             agent=agent,
             app=app,
             converter=converter,
-            instruction=instruction,
-            task_name=task_name,
-            timeout=timeout,
-            work_dir=work_dir,
-            task_logs_dir=task_logs_dir,
         )
 
-        # Persist trajectory and last agent response for test scripts.
-        if result.trajectory:
-            traj_path = task_logs_dir / "trajectory.json"
-            result.trajectory.to_json_file(traj_path)
-        _write_agent_response(task_logs_dir, _extract_last_agent_message(result.trajectory))
-
-        # 1) Execute task verifier script if present.
-        verifier_error = _run_task_verifier(
-            task_path=task_path,
-            task_logs_dir=task_logs_dir,
-            work_dir=work_dir,
-            timeout=timeout,
-        )
-        if verifier_error:
-            if result.error:
-                result.error = f"{result.error}; verifier: {verifier_error}"
-            else:
-                result.error = f"verifier: {verifier_error}"
-
-        scored = False
-
-        # 2) Harbor reward files from verifier scripts (authoritative)
-        if _has_reward_file(task_logs_dir):
-            reward = parse_reward_dir(task_logs_dir)
-            result.reward = reward
-            result.score = reward.score
-            result.passed = reward.passed
-            scored = True
-
-        # 3) Judge fallback only if still unscored
-        if not scored and judge is not None and result.trajectory is not None:
-            trace_text = result.trace_summary
-            judge_result = await judge.judge_trace(
-                task_instruction=instruction,
-                trace=trace_text,
-                task_name=task_name,
-            )
-            result.score = judge_result.score
-            result.passed = judge_result.score >= 0.5
-
-        if task_name in holdout_set:
+        if task.name in holdout_set:
             output.holdout_results.append(result)
         else:
             output.search_results.append(result)
@@ -247,8 +209,81 @@ async def evaluate_candidate(
     return output
 
 
+async def run_single_task(
+    task: TaskConfig,
+    candidate_dir: Path,
+    model: str,
+    output_dir: Path,
+    judge: JudgeProtocol | None = None,
+    *,
+    agent=None,
+    app=None,
+    converter: OtelToAtifConverter | None = None,
+) -> EvalResult:
+    """Run one task through setup → agent → verifier → teardown."""
+    task_logs_dir = output_dir / task.name
+    task_logs_dir.mkdir(parents=True, exist_ok=True)
+
+    run_converter = converter or OtelToAtifConverter()
+    run_agent = agent
+    run_app = app
+    if run_agent is None or run_app is None:
+        run_agent, run_app = load_adk_agent(candidate_dir, model)
+
+    result = EvalResult(task_name=task.name, passed=False, score=0.0)
+    work_dir = prepare_workspace(task, task_logs_dir)
+
+    setup_error = run_setup(task, task_logs_dir, work_dir)
+    if setup_error:
+        result.error = f"setup: {setup_error}"
+    else:
+        result = await run_agent_on_task(
+            agent=run_agent,
+            app=run_app,
+            converter=run_converter,
+            instruction=task.instruction,
+            task_name=task.name,
+            timeout=task.agent_timeout,
+            work_dir=work_dir,
+            task_logs_dir=task_logs_dir,
+            extra_env=task.env,
+        )
+
+        if result.trajectory:
+            result.trajectory.to_json_file(task_logs_dir / "trajectory.json")
+        _write_agent_response(task_logs_dir, _extract_last_agent_message(result.trajectory))
+
+        verifier_error = run_verifier(task, task_logs_dir, work_dir)
+        if verifier_error:
+            result.error = _merge_errors(result.error, f"verifier: {verifier_error}")
+
+        scored = False
+        if _has_reward_file(task_logs_dir):
+            reward = parse_reward_dir(task_logs_dir)
+            result.reward = reward
+            result.score = reward.score
+            result.passed = reward.passed
+            scored = True
+
+        if not scored and judge is not None and result.trajectory is not None:
+            trace_text = result.trace_summary
+            judge_result = await judge.judge_trace(
+                task_instruction=task.instruction,
+                trace=trace_text,
+                task_name=task.name,
+            )
+            result.score = judge_result.score
+            result.passed = judge_result.score >= 0.5
+
+    teardown_error = run_teardown(task, work_dir, task_logs_dir)
+    if teardown_error:
+        result.error = _merge_errors(result.error, f"teardown: {teardown_error}")
+
+    return result
+
+
 def _has_reward_file(logs_dir: Path) -> bool:
-    """Return True if a Harbor reward file exists under logs_dir."""
+    """Return True if a reward file exists under logs_dir."""
     return any(
         p.exists()
         for p in (
@@ -260,18 +295,26 @@ def _has_reward_file(logs_dir: Path) -> bool:
     )
 
 
-def _prepare_task_workspace(task_path: Path, task_logs_dir: Path) -> Path:
+def _merge_errors(current: str | None, new_error: str | None) -> str | None:
+    if not new_error:
+        return current
+    if not current:
+        return new_error
+    return f"{current}; {new_error}"
+
+
+def prepare_workspace(task: TaskConfig, task_logs_dir: Path) -> Path:
     """Prepare a per-task local workspace.
 
-    Copies optional fixtures from task_path/fixtures into task_logs_dir/work.
+    Copies optional fixtures into task_logs_dir/work.
     """
     work_dir = (task_logs_dir / "work").resolve()
     if work_dir.exists():
         shutil.rmtree(work_dir, ignore_errors=True)
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    fixtures_dir = task_path / "fixtures"
-    if fixtures_dir.exists() and fixtures_dir.is_dir():
+    if task.fixtures_dir and task.fixtures_dir.exists() and task.fixtures_dir.is_dir():
+        fixtures_dir = task.fixtures_dir
         for item in fixtures_dir.iterdir():
             dest = work_dir / item.name
             if item.is_dir():
@@ -295,57 +338,123 @@ def _extract_last_agent_message(trajectory: AtifTrajectory | None) -> str:
 
 
 def _write_agent_response(task_logs_dir: Path, response_text: str) -> None:
-    """Write agent response in Harbor-like logs location."""
+    """Write the final agent response in the logs location."""
     agent_dir = task_logs_dir / "agent"
     agent_dir.mkdir(parents=True, exist_ok=True)
     (agent_dir / "response.txt").write_text(response_text or "")
 
 
-def _run_task_verifier(
-    task_path: Path,
+def run_setup(
+    task: TaskConfig,
     task_logs_dir: Path,
     work_dir: Path,
-    timeout: int,
 ) -> str | None:
-    """Run task verification script (tests/test.sh) if present.
+    """Run scripts/setup.sh if present.
+
+    Returns an error string if setup execution failed, else None.
+    """
+    if task.setup_script is None or not task.setup_script.exists():
+        return None
+    return _run_script(
+        script_path=task.setup_script,
+        task=task,
+        task_logs_dir=task_logs_dir,
+        work_dir=work_dir,
+        timeout=task.setup_timeout,
+        step_name="setup",
+    )
+
+
+def run_verifier(
+    task: TaskConfig,
+    task_logs_dir: Path,
+    work_dir: Path,
+) -> str | None:
+    """Run tests/test.sh if present.
 
     Returns an error string if verifier execution failed, else None.
     """
-    test_script = (task_path / "tests" / "test.sh").resolve()
-    if not test_script.exists():
+    if task.verifier_script is None or not task.verifier_script.exists():
         return None
-
-    env = os.environ.copy()
-    logs_root = task_logs_dir.resolve()
-    logs_dir = str(logs_root)
-    work_dir = work_dir.resolve()
-    env.update(
-        {
-            "LOGS_DIR": logs_dir,
-            "REWARD_DIR": str(logs_root / "verifier"),
-            "AGENT_DIR": str(logs_root / "agent"),
-            "AGENT_RESPONSE_FILE": str(logs_root / "agent" / "response.txt"),
-            "WORK_DIR": str(work_dir),
-        }
+    return _run_script(
+        script_path=task.verifier_script,
+        task=task,
+        task_logs_dir=task_logs_dir,
+        work_dir=work_dir,
+        timeout=task.verifier_timeout,
+        step_name="verifier",
     )
 
-    proc = subprocess.run(
-        ["bash", str(test_script)],
-        cwd=str(work_dir),
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
+
+def run_teardown(
+    task: TaskConfig,
+    work_dir: Path,
+    task_logs_dir: Path,
+) -> str | None:
+    """Run scripts/teardown.sh if present."""
+    if task.teardown_script is None or not task.teardown_script.exists():
+        return None
+    return _run_script(
+        script_path=task.teardown_script,
+        task=task,
+        task_logs_dir=task_logs_dir,
+        work_dir=work_dir,
+        timeout=task.teardown_timeout,
+        step_name="teardown",
     )
+
+
+def _run_script(
+    script_path: Path,
+    task: TaskConfig,
+    task_logs_dir: Path,
+    work_dir: Path,
+    timeout: int,
+    step_name: str,
+) -> str | None:
+    """Run one task lifecycle script and return an error on failure."""
+    env = _build_script_env(task, task_logs_dir, work_dir)
+
+    try:
+        proc = subprocess.run(
+            ["bash", str(script_path)],
+            cwd=str(work_dir.resolve()),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return f"{step_name} timed out after {timeout}s"
+    except Exception as exc:
+        return f"{step_name} failed to start: {exc}"
+
     if proc.returncode == 0:
         return None
     stderr = (proc.stderr or "").strip()
     stdout = (proc.stdout or "").strip()
-    msg = stderr or stdout or f"Verifier exited with code {proc.returncode}"
+    msg = stderr or stdout or f"{step_name} exited with code {proc.returncode}"
     return msg[:1000]
 
 
-def _ensure_importable(candidate_dir: Path) -> None:
+def _build_script_env(task: TaskConfig, task_logs_dir: Path, work_dir: Path) -> dict[str, str]:
+    logs_root = task_logs_dir.resolve()
+    work_root = work_dir.resolve()
+    env = os.environ.copy()
+    env.update(
+        {
+            "LOGS_DIR": str(logs_root),
+            "REWARD_DIR": str(logs_root / "verifier"),
+            "AGENT_DIR": str(logs_root / "agent"),
+            "AGENT_RESPONSE_FILE": str(logs_root / "agent" / "response.txt"),
+            "WORK_DIR": str(work_root),
+        }
+    )
+    env.update(task.env)
+    return env
+
+
+def ensure_importable(candidate_dir: Path) -> None:
     """Ensure the candidate directory is importable by ADK's AgentLoader.
 
     AgentLoader expects:
@@ -377,7 +486,7 @@ def _ensure_importable(candidate_dir: Path) -> None:
             agent_path.write_text(content + "\nroot_agent = agent\n")
 
 
-def _load_adk_agent(
+def load_adk_agent(
     candidate_dir: Path,
     model: str = "gemini-2.5-flash",
 ) -> tuple:
@@ -403,7 +512,7 @@ def _load_adk_agent(
     from google.adk.apps.app import App
     from google.adk.cli.utils.agent_loader import AgentLoader
 
-    _ensure_importable(candidate_dir)
+    ensure_importable(candidate_dir)
 
     parent_dir = str(candidate_dir.parent)
     agent_name = candidate_dir.name
@@ -427,54 +536,24 @@ def _load_adk_agent(
     return root_agent, app
 
 
+# Backward-compatible aliases during module rename.
+_ensure_importable = ensure_importable
+_load_adk_agent = load_adk_agent
+
+
 def _discover_tasks(tasks_dir: Path) -> list[str]:
-    """Discover Harbor task directories.
-
-    Handles both flat and nested directory structures:
-    - Flat: tasks_dir/read-file/instruction.md
-    - Nested (Harbor default): tasks_dir/read-file/read-file/instruction.md
-
-    Returns task names that have either an instruction.md or task.toml.
-    For nested structures, returns the outer directory name (e.g. "read-file").
-    """
-    if not tasks_dir.exists():
-        return []
-    tasks = []
-    for d in sorted(tasks_dir.iterdir()):
-        if not d.is_dir():
-            continue
-        # Check flat structure: tasks_dir/task-name/instruction.md
-        flat_has_task = (d / "instruction.md").exists() or (d / "task.toml").exists()
-        # Check nested structure: tasks_dir/task-name/task-name/instruction.md
-        nested_has_task = (d / d.name / "instruction.md").exists() or (
-            d / d.name / "task.toml"
-        ).exists()
-        if flat_has_task or nested_has_task:
-            tasks.append(d.name)
-    return tasks
+    """Compatibility shim returning discovered task names."""
+    return [task.name for task in discover_tasks(tasks_dir)]
 
 
 def _resolve_task_path(tasks_dir: Path, task_name: str) -> Path:
-    """Resolve the actual task directory.
-
-    Harbor tasks can be nested (task-name/task-name/) or flat (task-name/).
-    Returns the path containing instruction.md, task.toml, etc.
-    """
-    flat = tasks_dir / task_name
-    nested = tasks_dir / task_name / task_name
-    if (flat / "instruction.md").exists() or (flat / "task.toml").exists():
-        return flat
-    if (nested / "instruction.md").exists() or (nested / "task.toml").exists():
-        return nested
-    return flat
+    """Compatibility shim for resolving task paths."""
+    return resolve_task_path(tasks_dir, task_name)
 
 
 def _read_instruction(task_path: Path) -> str:
-    """Read the task instruction."""
-    instruction_file = task_path / "instruction.md"
-    if instruction_file.exists():
-        return instruction_file.read_text()
-    return ""
+    """Compatibility shim for reading task instructions."""
+    return read_instruction(task_path)
 
 
 def _load_collector_span_file(task_logs_dir: Path, task_name: str) -> Path | None:
@@ -521,7 +600,7 @@ def _ensure_user_instruction_step(
     return trajectory
 
 
-async def _run_agent_on_task(
+async def run_agent_on_task(
     agent,
     app,
     converter: OtelToAtifConverter,
@@ -530,6 +609,7 @@ async def _run_agent_on_task(
     timeout: int,
     work_dir: Path | None = None,
     task_logs_dir: Path | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> EvalResult:
     """Run an ADK agent on a single task and collect ATIF trajectory.
 
@@ -579,22 +659,39 @@ async def _run_agent_on_task(
 
     content = types.Content(parts=[types.Part(text=instruction)], role="user")
 
+    old_env: dict[str, str] = {}
+    created_env_keys: set[str] = set()
+    for key, value in (extra_env or {}).items():
+        if key in os.environ:
+            old_env[key] = os.environ[key]
+        else:
+            created_env_keys.add(key)
+        os.environ[key] = value
+
     previous_cwd = Path.cwd()
     if work_dir is not None:
         work_dir.mkdir(parents=True, exist_ok=True)
         os.chdir(work_dir)
     try:
-        async for _ in runner.run_async(
-            user_id="meta_harness",
-            session_id=task_name,
-            new_message=content,
-        ):
-            pass
+
+        async def _run() -> None:
+            async for _ in runner.run_async(
+                user_id="meta_harness",
+                session_id=task_name,
+                new_message=content,
+            ):
+                pass
+
+        await asyncio.wait_for(_run(), timeout=timeout)
     except Exception as e:
         run_error = e
     finally:
         if work_dir is not None:
             os.chdir(previous_cwd)
+        for key in created_env_keys:
+            os.environ.pop(key, None)
+        for key, value in old_env.items():
+            os.environ[key] = value
 
     # Flush OTel spans to file and tear down the processor.
     if exporter is not None:
@@ -641,3 +738,8 @@ async def _run_agent_on_task(
         trajectory=trajectory,
         error=str(run_error) if run_error else None,
     )
+
+
+_prepare_task_workspace = prepare_workspace
+_run_task_verifier = run_verifier
+_run_agent_on_task = run_agent_on_task

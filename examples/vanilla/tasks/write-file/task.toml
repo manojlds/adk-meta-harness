@@ -1,0 +1,8 @@
+[metadata]
+description = "Write content to a file"
+
+[agent]
+timeout_sec = 120
+
+[verifier]
+timeout_sec = 120

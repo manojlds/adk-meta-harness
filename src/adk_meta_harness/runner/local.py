@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from adk_meta_harness.harbor_adapter import EvalOutput, evaluate_candidate
 from adk_meta_harness.judge.base import JudgeProtocol
+from adk_meta_harness.task_executor import EvalOutput, evaluate_candidate
 
 
 class LocalTaskRunner:
@@ -13,8 +13,9 @@ class LocalTaskRunner:
     with ``os.chdir`` as the only isolation. Verifier scripts run as
     local subprocesses.
 
-    This is the default runner and preserves the original behavior of
-    ``evaluate_candidate()``.
+    Tasks run sequentially because ``os.chdir`` is process-global —
+    concurrent tasks would clobber each other's working directory.
+    For parallel execution, use the Temporal runner once enabled.
     """
 
     def __init__(self) -> None:

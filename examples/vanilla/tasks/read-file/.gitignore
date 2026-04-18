@@ -9,4 +9,3 @@ node_modules/
 .ruff_cache/
 .mypy_cache/
 .pytest_cache/
-*.harbor

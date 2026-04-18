@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from adk_meta_harness.harbor_adapter import EvalOutput
+from adk_meta_harness.task_executor import EvalOutput
 
 
 @runtime_checkable

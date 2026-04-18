@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sys
 
-from adk_meta_harness.harbor_adapter import (
+from adk_meta_harness.task_executor import (
     _discover_tasks,
     _ensure_importable,
     _ensure_user_instruction_step,

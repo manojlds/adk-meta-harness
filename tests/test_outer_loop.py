@@ -174,7 +174,7 @@ class TestCleanupProposerFiles:
 
 class TestComputeScoreWithRealObjects:
     def test_with_eval_result_objects(self):
-        from adk_meta_harness.harbor_adapter import EvalResult
+        from adk_meta_harness.task_executor import EvalResult
 
         search = [
             EvalResult(task_name="t1", passed=True, score=1.0),
