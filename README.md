@@ -38,7 +38,8 @@ Common variables:
 
 ## Task Format
 
-The project now uses a first-party task format (no Harbor dependency).
+The project uses a first-party task format inspired by Harbor's task
+conventions (without a Harbor runtime dependency).
 
 ```text
 tasks/
@@ -75,7 +76,20 @@ MY_FLAG = "value"
 
 Verifier scripts can write either `reward.txt` or `reward.json`.
 
-## Quick Start (Local)
+## Usage
+
+### Local runner
+
+Evaluate a single candidate:
+
+```bash
+amh eval \
+  --candidate examples/vanilla/initial_harness \
+  --dataset examples/vanilla/tasks \
+  --runner local
+```
+
+Run optimization locally:
 
 ```bash
 amh optimize \
@@ -85,28 +99,28 @@ amh optimize \
   --proposer-model opencode-go/glm-5.1 \
   --model openai/glm-5.1 \
   --iterations 10 \
-  --candidates-dir ./candidates/vanilla
+  --candidates-dir ./candidates/vanilla \
+  --runner local
 ```
 
-Evaluate a single candidate:
+### Temporal runner
+
+Evaluate using the Temporal runner interface:
 
 ```bash
 amh eval \
   --candidate ./candidates/vanilla/v0003 \
-  --dataset examples/vanilla/tasks
+  --dataset examples/vanilla/tasks \
+  --runner temporal
 ```
 
-## Temporal Mode
-
-Temporal mode provides distributed optimization orchestration.
-
-1) Start a worker (long-lived):
+Start a worker (long-lived):
 
 ```bash
 amh worker --server localhost:7233 --task-queue amh-tasks
 ```
 
-2) Start optimize as a workflow (fire-and-forget):
+Run optimization as a Temporal workflow execution (returns immediately):
 
 ```bash
 amh optimize \
@@ -118,12 +132,10 @@ amh optimize \
   --iterations 10
 ```
 
-The CLI prints Workflow ID (and Run ID when available) and exits.
-
 Notes:
-- Temporal mode requires shared filesystem visibility for worker processes.
-- `amh eval --runner temporal` currently uses the same local single-candidate
-  evaluator to preserve the `TaskRunner` interface.
+- Temporal optimize requires shared filesystem visibility for worker processes.
+- `amh eval --runner temporal` preserves the `TaskRunner` interface by using
+  the same local single-candidate evaluator.
 
 ## Proposers
 
@@ -197,18 +209,29 @@ Model resolution order:
 
 ## CLI
 
+Local commands:
+
 ```text
-amh optimize --dataset PATH --initial-harness PATH [options]
-amh eval --candidate PATH --dataset PATH [options]
+amh eval --candidate PATH --dataset PATH --runner local [options]
+amh optimize --dataset PATH --initial-harness PATH --runner local [options]
+```
+
+Temporal commands:
+
+```text
+amh eval --candidate PATH --dataset PATH --runner temporal [options]
+amh optimize --dataset PATH --initial-harness PATH --runner temporal [options]
 amh worker [--server HOST:PORT] [--task-queue NAME]
 ```
 
-Common optimize options:
+Common optimize options (local and temporal):
 - `--proposer`, `--proposer-model`
 - `--judge`, `--judge-model`
 - `--iterations`, `--holdout-ratio`, `--timeout`
 - `--runner [local|temporal]`
-- `--server`, `--task-queue`, `--workflow-id` (temporal mode)
+
+Temporal optimize options:
+- `--server`, `--task-queue`, `--workflow-id`
 
 ## Project Layout
 
