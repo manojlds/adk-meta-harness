@@ -73,7 +73,7 @@ def test_worker_command_runs_temporal_worker(monkeypatch, capsys):
     assert "Starting Temporal worker on 127.0.0.1:7233" in out
 
 
-def test_eval_temporal_passes_runner_kwargs(monkeypatch, tmp_path):
+def test_eval_temporal_uses_local_eval_and_prints_note(monkeypatch, tmp_path, capsys):
     candidate = tmp_path / "candidate"
     dataset = tmp_path / "tasks"
     candidate.mkdir()
@@ -85,10 +85,7 @@ def test_eval_temporal_passes_runner_kwargs(monkeypatch, tmp_path):
 
     def fake_get_runner(name: str, **kwargs):
         assert name == "temporal"
-        assert kwargs == {
-            "server_url": "127.0.0.1:7233",
-            "task_queue": "queue-a",
-        }
+        assert kwargs == {}
         return _FakeRunner()
 
     monkeypatch.setattr("adk_meta_harness.runner.get_runner", fake_get_runner)
@@ -112,3 +109,6 @@ def test_eval_temporal_passes_runner_kwargs(monkeypatch, tmp_path):
     )
 
     main()
+
+    out = capsys.readouterr().out
+    assert "eval with --runner temporal currently executes locally" in out

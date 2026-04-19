@@ -20,6 +20,22 @@ uv sync --extra skills    # adk-skills-agent + adk-tool-search
 uv sync --extra temporal  # Temporal worker/workflow support
 ```
 
+## Environment
+
+Copy and configure environment values:
+
+```bash
+cp .env.example .env
+```
+
+Common variables:
+
+| Variable | Purpose |
+|---|---|
+| `AMH_MODEL` | Default model for the agent under optimization |
+| `OPENAI_API_KEY` | API key for model provider used by the harness |
+| `OPENAI_BASE_URL` / `OPENAI_API_BASE` | Base URL for OpenAI-compatible endpoints |
+
 ## Task Format
 
 The project now uses a first-party task format (no Harbor dependency).
@@ -82,7 +98,7 @@ amh eval \
 
 ## Temporal Mode
 
-Phase 2 introduces a Temporal workflow mode for optimization orchestration.
+Temporal mode provides distributed optimization orchestration.
 
 1) Start a worker (long-lived):
 
@@ -108,6 +124,47 @@ Notes:
 - Temporal mode requires shared filesystem visibility for worker processes.
 - `amh eval --runner temporal` currently uses the same local single-candidate
   evaluator to preserve the `TaskRunner` interface.
+
+## Proposers
+
+Supported proposer values:
+
+| Proposer | Flag |
+|---|---|
+| OpenCode | `--proposer opencode` |
+| Pi | `--proposer pi` |
+| Custom CLI command | `--proposer <command>` |
+
+You can set a proposer model independently with `--proposer-model`.
+
+## Judges
+
+Supported judge values:
+
+| Judge | Flag |
+|---|---|
+| LiteLLM | `--judge litellm` |
+| ADK | `--judge adk` |
+| CLI (OpenCode/Pi/custom) | `--judge opencode`, `--judge pi`, or custom command |
+
+Scoring order:
+1. Use reward files when present (`reward.txt`/`reward.json`)
+2. Otherwise use judge scoring when configured
+3. Otherwise mark task failed (score `0.0`)
+
+## Harness Surfaces
+
+The proposer can modify these harness surfaces:
+
+| Surface | Path |
+|---|---|
+| System prompt | `system_prompt.md` |
+| Skills | `skills/*/SKILL.md` |
+| Tools | `tools/*.py` |
+| Callbacks | `callbacks/*.py` |
+| Routing | `routing/*.yaml` |
+| Agent config | `config.yaml` |
+| Full harness | `agent.py` |
 
 ## Runners
 

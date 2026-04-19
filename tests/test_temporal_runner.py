@@ -6,6 +6,8 @@ import pytest
 
 from adk_meta_harness.runner import temporal_runner
 from adk_meta_harness.runner.temporal_runner import (
+    DEFAULT_TEMPORAL_SERVER_URL,
+    DEFAULT_TEMPORAL_TASK_QUEUE,
     TemporalOptimizeInput,
     TemporalOptimizeOutput,
     TemporalTaskRunner,
@@ -75,6 +77,43 @@ async def test_temporal_runner_evaluate_delegates_to_task_executor(monkeypatch, 
     assert called["model"] == "openai/gpt-4.1-mini"
     assert called["timeout"] == 42
     assert out.search_results[0].task_name == "t1"
+
+
+@pytest.mark.asyncio
+async def test_temporal_runner_evaluate_warns_on_unused_connection_args(
+    monkeypatch,
+    tmp_path,
+    caplog,
+):
+    async def fake_evaluate_candidate(**kwargs):
+        return EvalOutput(search_results=[EvalResult(task_name="t1", passed=True, score=1.0)])
+
+    monkeypatch.setattr(temporal_runner, "evaluate_candidate", fake_evaluate_candidate)
+
+    runner = TemporalTaskRunner(
+        server_url="127.0.0.1:7233",
+        task_queue="queue-a",
+    )
+
+    caplog.set_level("WARNING")
+    await runner.evaluate(
+        candidate_dir=tmp_path / "candidate",
+        tasks_dir=tmp_path / "tasks",
+    )
+
+    assert any("evaluate runs locally" in rec.message for rec in caplog.records)
+
+    # No warning when defaults are used.
+    caplog.clear()
+    default_runner = TemporalTaskRunner(
+        server_url=DEFAULT_TEMPORAL_SERVER_URL,
+        task_queue=DEFAULT_TEMPORAL_TASK_QUEUE,
+    )
+    await default_runner.evaluate(
+        candidate_dir=tmp_path / "candidate2",
+        tasks_dir=tmp_path / "tasks2",
+    )
+    assert not any("evaluate runs locally" in rec.message for rec in caplog.records)
 
 
 @pytest.mark.asyncio

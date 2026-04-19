@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -10,6 +11,8 @@ from adk_meta_harness.task_executor import EvalOutput, evaluate_candidate
 
 DEFAULT_TEMPORAL_SERVER_URL = "localhost:7233"
 DEFAULT_TEMPORAL_TASK_QUEUE = "amh-tasks"
+
+logger = logging.getLogger(__name__)
 
 _TEMPORAL_IMPORT_ERROR: Exception | None = None
 try:
@@ -135,6 +138,9 @@ if _TEMPORAL_AVAILABLE:
             else None,
             judge=judge,
             timeout=optimize_input.timeout,
+            # Activities execute inside worker processes and should use the
+            # in-process local runner there. Temporal orchestration happens at
+            # the workflow/activity level, not by nesting Temporal runners.
             runner="local",
         )
 
@@ -197,7 +203,7 @@ async def start_optimize_workflow(
         id=workflow_id or _default_workflow_id(),
         task_queue=task_queue,
     )
-    run_id = getattr(handle, "first_execution_run_id", "") or ""
+    run_id = handle.first_execution_run_id
     return handle.id, run_id
 
 
@@ -261,6 +267,17 @@ class TemporalTaskRunner:
         holdout_task_names: list[str] | None = None,
         judge: object | None = None,
     ) -> EvalOutput:
+        if (
+            self._server_url != DEFAULT_TEMPORAL_SERVER_URL
+            or self._task_queue != DEFAULT_TEMPORAL_TASK_QUEUE
+        ):
+            logger.warning(
+                "TemporalTaskRunner.evaluate runs locally; server_url=%s and "
+                "task_queue=%s are ignored",
+                self._server_url,
+                self._task_queue,
+            )
+
         return await evaluate_candidate(
             candidate_dir=candidate_dir,
             tasks_dir=tasks_dir,

@@ -23,6 +23,30 @@ def main() -> None:
         DEFAULT_TEMPORAL_TASK_QUEUE,
     )
 
+    def _add_runner_arg(subparser: argparse.ArgumentParser) -> None:
+        subparser.add_argument(
+            "--runner",
+            default="local",
+            choices=["local", "temporal"],
+            help="Task runner (default: local)",
+        )
+
+    def _add_temporal_connection_args(
+        subparser: argparse.ArgumentParser,
+        *,
+        purpose: str,
+    ) -> None:
+        subparser.add_argument(
+            "--server",
+            default=DEFAULT_TEMPORAL_SERVER_URL,
+            help=f"Temporal server address{purpose} (default: {DEFAULT_TEMPORAL_SERVER_URL})",
+        )
+        subparser.add_argument(
+            "--task-queue",
+            default=DEFAULT_TEMPORAL_TASK_QUEUE,
+            help=f"Temporal task queue{purpose} (default: {DEFAULT_TEMPORAL_TASK_QUEUE})",
+        )
+
     parser = argparse.ArgumentParser(
         prog="adk-meta-harness",
         description="Meta-harness optimization for Google ADK agents",
@@ -101,27 +125,8 @@ def main() -> None:
         default=300,
         help="Timeout per task in seconds (default: 300)",
     )
-    opt.add_argument(
-        "--runner",
-        default="local",
-        choices=["local", "temporal"],
-        help="Task runner (default: local)",
-    )
-    opt.add_argument(
-        "--server",
-        default=DEFAULT_TEMPORAL_SERVER_URL,
-        help=(
-            "Temporal server address for --runner temporal "
-            f"(default: {DEFAULT_TEMPORAL_SERVER_URL})"
-        ),
-    )
-    opt.add_argument(
-        "--task-queue",
-        default=DEFAULT_TEMPORAL_TASK_QUEUE,
-        help=(
-            f"Temporal task queue for --runner temporal (default: {DEFAULT_TEMPORAL_TASK_QUEUE})"
-        ),
-    )
+    _add_runner_arg(opt)
+    _add_temporal_connection_args(opt, purpose=" for --runner temporal")
     opt.add_argument(
         "--workflow-id",
         default=None,
@@ -167,40 +172,12 @@ def main() -> None:
         default=300,
         help="Timeout per task in seconds (default: 300)",
     )
-    ev.add_argument(
-        "--runner",
-        default="local",
-        choices=["local", "temporal"],
-        help="Task runner (default: local)",
-    )
-    ev.add_argument(
-        "--server",
-        default=DEFAULT_TEMPORAL_SERVER_URL,
-        help=(
-            "Temporal server address for --runner temporal "
-            f"(default: {DEFAULT_TEMPORAL_SERVER_URL})"
-        ),
-    )
-    ev.add_argument(
-        "--task-queue",
-        default=DEFAULT_TEMPORAL_TASK_QUEUE,
-        help=(
-            f"Temporal task queue for --runner temporal (default: {DEFAULT_TEMPORAL_TASK_QUEUE})"
-        ),
-    )
+    _add_runner_arg(ev)
+    _add_temporal_connection_args(ev, purpose=" for --runner temporal")
 
     # worker subcommand
     wk = subparsers.add_parser("worker", help="Run a Temporal worker")
-    wk.add_argument(
-        "--server",
-        default=DEFAULT_TEMPORAL_SERVER_URL,
-        help=f"Temporal server address (default: {DEFAULT_TEMPORAL_SERVER_URL})",
-    )
-    wk.add_argument(
-        "--task-queue",
-        default=DEFAULT_TEMPORAL_TASK_QUEUE,
-        help=f"Temporal task queue (default: {DEFAULT_TEMPORAL_TASK_QUEUE})",
-    )
+    _add_temporal_connection_args(wk, purpose="")
 
     args = parser.parse_args()
 
@@ -270,13 +247,12 @@ def main() -> None:
         from adk_meta_harness.runner import get_runner
 
         judge = get_judge(args.judge, model=args.judge_model)
-        runner_kwargs = {}
         if args.runner == "temporal":
-            runner_kwargs = {
-                "server_url": args.server,
-                "task_queue": args.task_queue,
-            }
-        task_runner = get_runner(args.runner, **runner_kwargs)
+            print(
+                "Note: eval with --runner temporal currently executes locally; "
+                "--server/--task-queue are only used by optimize and worker."
+            )
+        task_runner = get_runner(args.runner)
 
         eval_output = asyncio.run(
             task_runner.evaluate(
