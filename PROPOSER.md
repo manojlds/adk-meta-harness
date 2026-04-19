@@ -22,6 +22,7 @@ Everything in this directory is mutable:
 - Do NOT change the model unless `config.yaml` has `allow_model_changes: true`.
 - Do NOT add task-specific hacks or benchmark-specific keyword rules.
 - Do NOT modify files outside this directory.
+- Do NOT edit generated artifacts (`evaluation/`, `traces/`, `meta.json`).
 
 ## Goal
 
@@ -64,7 +65,8 @@ When modifying skills:
 
 1. Read `learnings.md` for accumulated insights from prior iterations.
 2. Read the current harness: `agent.py`, `system_prompt.md`, `config.yaml`.
-3. Browse `../` for prior candidate directories, their traces, and scores.
+3. Browse `../` for prior candidate directories, their traces, and scores
+   (`results.tsv`, `learnings.md`, candidate `meta.json`).
 4. Diagnose failure patterns from traces — look for recurring errors,
    missed tool calls, incorrect routing, etc.
 5. Make ONE targeted harness change at a time.

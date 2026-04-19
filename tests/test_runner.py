@@ -5,12 +5,19 @@ import pytest
 from adk_meta_harness.runner import get_runner
 from adk_meta_harness.runner.base import TaskRunner
 from adk_meta_harness.runner.local import LocalTaskRunner
+from adk_meta_harness.runner.temporal_runner import TemporalTaskRunner
 
 
 def test_get_runner_local():
     runner = get_runner("local")
     assert isinstance(runner, LocalTaskRunner)
     assert runner.name == "local"
+
+
+def test_get_runner_temporal():
+    runner = get_runner("temporal")
+    assert isinstance(runner, TemporalTaskRunner)
+    assert runner.name == "temporal"
 
 
 def test_get_runner_unknown_raises():
@@ -20,6 +27,11 @@ def test_get_runner_unknown_raises():
 
 def test_local_runner_is_task_runner():
     runner = get_runner("local")
+    assert isinstance(runner, TaskRunner)
+
+
+def test_temporal_runner_is_task_runner():
+    runner = get_runner("temporal")
     assert isinstance(runner, TaskRunner)
 
 
