@@ -18,6 +18,11 @@ load_dotenv()
 
 
 def main() -> None:
+    from adk_meta_harness.runner.temporal_runner import (
+        DEFAULT_TEMPORAL_SERVER_URL,
+        DEFAULT_TEMPORAL_TASK_QUEUE,
+    )
+
     parser = argparse.ArgumentParser(
         prog="adk-meta-harness",
         description="Meta-harness optimization for Google ADK agents",
@@ -99,8 +104,28 @@ def main() -> None:
     opt.add_argument(
         "--runner",
         default="local",
-        choices=["local"],
+        choices=["local", "temporal"],
         help="Task runner (default: local)",
+    )
+    opt.add_argument(
+        "--server",
+        default=DEFAULT_TEMPORAL_SERVER_URL,
+        help=(
+            "Temporal server address for --runner temporal "
+            f"(default: {DEFAULT_TEMPORAL_SERVER_URL})"
+        ),
+    )
+    opt.add_argument(
+        "--task-queue",
+        default=DEFAULT_TEMPORAL_TASK_QUEUE,
+        help=(
+            f"Temporal task queue for --runner temporal (default: {DEFAULT_TEMPORAL_TASK_QUEUE})"
+        ),
+    )
+    opt.add_argument(
+        "--workflow-id",
+        default=None,
+        help="Optional Temporal workflow ID for --runner temporal",
     )
 
     # eval subcommand
@@ -145,13 +170,73 @@ def main() -> None:
     ev.add_argument(
         "--runner",
         default="local",
-        choices=["local"],
+        choices=["local", "temporal"],
         help="Task runner (default: local)",
+    )
+    ev.add_argument(
+        "--server",
+        default=DEFAULT_TEMPORAL_SERVER_URL,
+        help=(
+            "Temporal server address for --runner temporal "
+            f"(default: {DEFAULT_TEMPORAL_SERVER_URL})"
+        ),
+    )
+    ev.add_argument(
+        "--task-queue",
+        default=DEFAULT_TEMPORAL_TASK_QUEUE,
+        help=(
+            f"Temporal task queue for --runner temporal (default: {DEFAULT_TEMPORAL_TASK_QUEUE})"
+        ),
+    )
+
+    # worker subcommand
+    wk = subparsers.add_parser("worker", help="Run a Temporal worker")
+    wk.add_argument(
+        "--server",
+        default=DEFAULT_TEMPORAL_SERVER_URL,
+        help=f"Temporal server address (default: {DEFAULT_TEMPORAL_SERVER_URL})",
+    )
+    wk.add_argument(
+        "--task-queue",
+        default=DEFAULT_TEMPORAL_TASK_QUEUE,
+        help=f"Temporal task queue (default: {DEFAULT_TEMPORAL_TASK_QUEUE})",
     )
 
     args = parser.parse_args()
 
     if args.command == "optimize":
+        if args.runner == "temporal":
+            from adk_meta_harness.runner.temporal_runner import (
+                TemporalOptimizeInput,
+                start_optimize_workflow,
+            )
+
+            workflow_id, run_id = asyncio.run(
+                start_optimize_workflow(
+                    TemporalOptimizeInput(
+                        dataset=str(args.dataset),
+                        initial_harness=str(args.initial_harness),
+                        proposer=args.proposer,
+                        proposer_model=args.proposer_model,
+                        model=args.model,
+                        iterations=args.iterations,
+                        holdout_ratio=args.holdout_ratio,
+                        candidates_dir=str(args.candidates_dir) if args.candidates_dir else None,
+                        judge=args.judge,
+                        judge_model=args.judge_model,
+                        timeout=args.timeout,
+                    ),
+                    server_url=args.server,
+                    task_queue=args.task_queue,
+                    workflow_id=args.workflow_id,
+                )
+            )
+            print("\nStarted Temporal optimization workflow")
+            print(f"Workflow ID: {workflow_id}")
+            if run_id:
+                print(f"Run ID: {run_id}")
+            return
+
         from adk_meta_harness.judge import get_judge
         from adk_meta_harness.outer_loop import OptimizeConfig, optimize
 
@@ -185,7 +270,13 @@ def main() -> None:
         from adk_meta_harness.runner import get_runner
 
         judge = get_judge(args.judge, model=args.judge_model)
-        task_runner = get_runner(args.runner)
+        runner_kwargs = {}
+        if args.runner == "temporal":
+            runner_kwargs = {
+                "server_url": args.server,
+                "task_queue": args.task_queue,
+            }
+        task_runner = get_runner(args.runner, **runner_kwargs)
 
         eval_output = asyncio.run(
             task_runner.evaluate(
@@ -203,6 +294,12 @@ def main() -> None:
         for r in all_results:
             status = "PASS" if r.passed else "FAIL"
             print(f"  [{status}] {r.task_name}")
+
+    elif args.command == "worker":
+        from adk_meta_harness.runner.temporal_runner import run_worker
+
+        print(f"Starting Temporal worker on {args.server} (task queue: {args.task_queue})")
+        asyncio.run(run_worker(server_url=args.server, task_queue=args.task_queue))
 
 
 if __name__ == "__main__":
