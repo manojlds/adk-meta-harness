@@ -104,6 +104,23 @@ def main() -> None:
         help="Fraction of tasks to hold out for gating (default: 0.3)",
     )
     opt.add_argument(
+        "--test-ratio",
+        type=float,
+        default=0.2,
+        help="Fraction of tasks reserved for final test-only eval (default: 0.2)",
+    )
+    opt.add_argument(
+        "--split-seed",
+        type=int,
+        default=42,
+        help="Deterministic seed for search/holdout/test task splitting (default: 42)",
+    )
+    opt.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional run ID for writing split artifacts under candidates/runs/<run-id>",
+    )
+    opt.add_argument(
         "--candidates-dir",
         type=Path,
         default=None,
@@ -198,6 +215,9 @@ def main() -> None:
                         model=args.model,
                         iterations=args.iterations,
                         holdout_ratio=args.holdout_ratio,
+                        test_ratio=args.test_ratio,
+                        split_seed=args.split_seed,
+                        run_id=args.run_id,
                         candidates_dir=str(args.candidates_dir) if args.candidates_dir else None,
                         judge=args.judge,
                         judge_model=args.judge_model,
@@ -229,6 +249,9 @@ def main() -> None:
             model=args.model,
             iterations=args.iterations,
             holdout_ratio=args.holdout_ratio,
+            test_ratio=args.test_ratio,
+            split_seed=args.split_seed,
+            run_id=args.run_id,
             candidates_dir=args.candidates_dir,
             timeout=args.timeout,
             judge=judge,
@@ -239,7 +262,10 @@ def main() -> None:
         print("\nOptimization complete!")
         print(f"Best holdout: {result.best_holdout:.4f}")
         print(f"Best search: {result.best_search:.4f}")
+        if result.best_test is not None:
+            print(f"Best final test: {result.best_test:.4f}")
         print(f"Best candidate: {result.best_candidate.path}")
+        print(f"Run ID: {result.run_id}")
         print(f"Iterations: {result.iterations_completed}")
 
     elif args.command == "eval":

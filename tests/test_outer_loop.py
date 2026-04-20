@@ -7,13 +7,18 @@ import pytest
 
 from adk_meta_harness.learnings import Learnings
 from adk_meta_harness.outer_loop import (
+    OptimizeConfig,
     _build_proposer_instruction,
     _cleanup_proposer_files,
     _compute_score,
     _count_harness_files,
     _extract_failure_patterns,
     _link_traces_to_candidate,
+    optimize,
 )
+from adk_meta_harness.splits import split_task_names
+from adk_meta_harness.task_executor import EvalOutput, EvalResult
+from adk_meta_harness.validate import ValidationResult
 
 
 class TestComputeScore:
@@ -187,3 +192,103 @@ class TestComputeScoreWithRealObjects:
         assert score["search"] == 0.5
         assert score["holdout"] == 1.0
         assert score["combined"] == pytest.approx(2 / 3)
+
+
+@pytest.mark.asyncio
+async def test_optimize_uses_search_holdout_splits_and_runs_final_test_once(
+    monkeypatch,
+    tmp_path,
+):
+    dataset = tmp_path / "tasks"
+    dataset.mkdir()
+    for i in range(10):
+        task_dir = dataset / f"task-{i:02d}"
+        task_dir.mkdir()
+        (task_dir / "instruction.md").write_text("Do task")
+
+    initial_harness = tmp_path / "initial_harness"
+    initial_harness.mkdir()
+    (initial_harness / "agent.py").write_text("agent = object()\nroot_agent = agent\n")
+    (initial_harness / "system_prompt.md").write_text("You are an agent")
+    (initial_harness / "config.yaml").write_text("model: gemini-2.5-flash\n")
+
+    expected = split_task_names(
+        [f"task-{i:02d}" for i in range(10)],
+        holdout_ratio=0.3,
+        test_ratio=0.2,
+        seed=123,
+    )
+
+    class FakeRunner:
+        def __init__(self):
+            self.calls: list[dict] = []
+
+        async def evaluate(self, **kwargs):
+            self.calls.append(kwargs)
+            search_names = kwargs.get("search_task_names") or []
+            holdout_names = kwargs.get("holdout_task_names") or []
+            return EvalOutput(
+                search_results=[
+                    EvalResult(task_name=name, passed=True, score=1.0) for name in search_names
+                ],
+                holdout_results=[
+                    EvalResult(task_name=name, passed=True, score=1.0) for name in holdout_names
+                ],
+            )
+
+    class FakeProposer:
+        name = "fake"
+
+        async def propose_edit(self, **kwargs):
+            return {
+                "description": "no-op",
+                "change_type": "harness",
+            }
+
+    fake_runner = FakeRunner()
+    monkeypatch.setattr("adk_meta_harness.runner.get_runner", lambda *_a, **_k: fake_runner)
+    monkeypatch.setattr(
+        "adk_meta_harness.outer_loop.get_proposer", lambda *_a, **_k: FakeProposer()
+    )
+    monkeypatch.setattr(
+        "adk_meta_harness.outer_loop.validate_candidate",
+        lambda *_a, **_k: ValidationResult(valid=True),
+    )
+
+    result = await optimize(
+        OptimizeConfig(
+            dataset=dataset,
+            initial_harness=initial_harness,
+            proposer="opencode",
+            model="gemini-2.5-flash",
+            iterations=1,
+            holdout_ratio=0.3,
+            test_ratio=0.2,
+            split_seed=123,
+            candidates_dir=tmp_path / "candidates",
+            run_id="phase1-test",
+        )
+    )
+
+    assert len(fake_runner.calls) == 3
+
+    baseline_call = fake_runner.calls[0]
+    iter_call = fake_runner.calls[1]
+    final_call = fake_runner.calls[2]
+
+    assert set(baseline_call["search_task_names"]) == set(expected.search_task_names)
+    assert set(baseline_call["holdout_task_names"]) == set(expected.holdout_task_names)
+
+    assert set(iter_call["search_task_names"]) == set(expected.search_task_names)
+    assert set(iter_call["holdout_task_names"]) == set(expected.holdout_task_names)
+
+    assert set(final_call["search_task_names"]) == set(expected.test_task_names)
+    assert final_call["holdout_task_names"] == []
+
+    assert result.best_test == 1.0
+    assert result.run_id == "phase1-test"
+
+    split_manifest = tmp_path / "candidates" / "runs" / "phase1-test" / "task_splits.json"
+    assert split_manifest.exists()
+    payload = json.loads(split_manifest.read_text())
+    assert payload["splits"]["seed"] == 123

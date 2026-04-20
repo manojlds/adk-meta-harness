@@ -13,6 +13,9 @@ def test_optimize_temporal_starts_workflow(monkeypatch, tmp_path, capsys):
     async def fake_start_optimize_workflow(optimize_input, **kwargs):
         assert optimize_input.dataset == str(dataset)
         assert optimize_input.initial_harness == str(harness)
+        assert optimize_input.test_ratio == 0.2
+        assert optimize_input.split_seed == 42
+        assert optimize_input.run_id is None
         assert kwargs["server_url"] == "localhost:7233"
         assert kwargs["task_queue"] == "amh-tasks"
         return "wf-123", "run-456"

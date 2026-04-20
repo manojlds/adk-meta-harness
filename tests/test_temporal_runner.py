@@ -25,6 +25,9 @@ def test_temporal_optimize_input_payload_roundtrip():
         model="openai/gpt-4.1-mini",
         iterations=12,
         holdout_ratio=0.25,
+        test_ratio=0.15,
+        split_seed=99,
+        run_id="run-abc",
         candidates_dir="/tmp/candidates",
         judge="litellm",
         judge_model="openai/gpt-4.1-mini",
@@ -42,8 +45,10 @@ def test_temporal_optimize_output_payload_roundtrip():
         best_candidate_path="/tmp/candidates/v0007",
         best_holdout=0.8,
         best_search=0.9,
+        best_test=0.7,
         iterations_completed=7,
         candidates_dir="/tmp/candidates",
+        run_id="run-abc",
     )
 
     payload = original.to_payload()

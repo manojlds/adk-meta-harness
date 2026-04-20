@@ -11,8 +11,10 @@ This is the heart of adk-meta-harness. Following the Meta-Harness paper:
 
 from __future__ import annotations
 
+import json
 import shutil
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -28,6 +30,8 @@ from adk_meta_harness.candidate import (
 from adk_meta_harness.gate import gate_decision
 from adk_meta_harness.learnings import Learnings
 from adk_meta_harness.proposer import get_proposer
+from adk_meta_harness.splits import TaskSplits, split_task_names
+from adk_meta_harness.task import discover_tasks
 from adk_meta_harness.validate import validate_candidate
 
 if TYPE_CHECKING:
@@ -43,6 +47,9 @@ class OptimizeConfig:
     model: str = "gemini-2.5-flash"
     iterations: int = 10
     holdout_ratio: float = 0.3
+    test_ratio: float = 0.2
+    split_seed: int = 42
+    run_id: str | None = None
     candidates_dir: Path | None = None
     judge: JudgeProtocol | None = None
     timeout: int = 300
@@ -55,8 +62,10 @@ class OptimizeResult:
     best_candidate: Candidate
     best_holdout: float
     best_search: float
+    best_test: float | None
     iterations_completed: int
     candidates_dir: Path
+    run_id: str
     all_results: list[dict]
 
 
@@ -76,6 +85,26 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
     """
     candidates_dir = config.candidates_dir or config.dataset / "candidates"
     candidates_dir.mkdir(parents=True, exist_ok=True)
+
+    run_id = config.run_id or _default_run_id()
+    run_dir = candidates_dir / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    all_task_names = [task.name for task in discover_tasks(config.dataset)]
+    task_splits = _load_or_create_task_splits(
+        run_dir=run_dir,
+        task_names=all_task_names,
+        holdout_ratio=config.holdout_ratio,
+        test_ratio=config.test_ratio,
+        split_seed=config.split_seed,
+    )
+    print(
+        "Task splits: "
+        f"search={len(task_splits.search_task_names)} "
+        f"holdout={len(task_splits.holdout_task_names)} "
+        f"test={len(task_splits.test_task_names)} "
+        f"(seed={task_splits.seed})"
+    )
 
     from adk_meta_harness.runner import get_runner
 
@@ -133,6 +162,8 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
             tasks_dir=config.dataset,
             model=config.model,
             timeout=config.timeout,
+            search_task_names=task_splits.search_task_names,
+            holdout_task_names=task_splits.holdout_task_names,
             judge=config.judge,
         )
         search_results = eval_output.search_results
@@ -249,6 +280,8 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
             tasks_dir=config.dataset,
             model=config.model,
             timeout=config.timeout,
+            search_task_names=task_splits.search_task_names,
+            holdout_task_names=task_splits.holdout_task_names,
             judge=config.judge,
         )
         search_results = eval_output.search_results
@@ -313,14 +346,66 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
 
         all_results.append(proposed_score)
 
+    best_test: float | None = None
+    if task_splits.test_task_names:
+        print(f"\n=== Final test evaluation ({len(task_splits.test_task_names)} tasks) ===")
+        final_output = await task_runner.evaluate(
+            candidate_dir=best_candidate.path,
+            tasks_dir=config.dataset,
+            model=config.model,
+            timeout=config.timeout,
+            search_task_names=task_splits.test_task_names,
+            holdout_task_names=[],
+            judge=config.judge,
+        )
+        final_score = _compute_score(final_output.search_results, [])
+        best_test = final_score["search"]
+        print(f"  Final test: {best_test:.4f}")
+
     return OptimizeResult(
         best_candidate=best_candidate,
         best_holdout=best_holdout,
         best_search=best_search,
+        best_test=best_test,
         iterations_completed=config.iterations,
         candidates_dir=candidates_dir,
+        run_id=run_id,
         all_results=all_results,
     )
+
+
+def _default_run_id() -> str:
+    return datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+
+
+def _load_or_create_task_splits(
+    *,
+    run_dir: Path,
+    task_names: list[str],
+    holdout_ratio: float,
+    test_ratio: float,
+    split_seed: int,
+) -> TaskSplits:
+    manifest_path = run_dir / "task_splits.json"
+    if manifest_path.exists():
+        payload = json.loads(manifest_path.read_text())
+        splits_payload = payload.get("splits", payload)
+        return TaskSplits.from_dict(splits_payload)
+
+    splits = split_task_names(
+        task_names,
+        holdout_ratio=holdout_ratio,
+        test_ratio=test_ratio,
+        seed=split_seed,
+    )
+    manifest = {
+        "created_at": datetime.now(UTC).isoformat(),
+        "task_count": len(task_names),
+        "task_names": sorted(set(task_names)),
+        "splits": splits.to_dict(),
+    }
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True))
+    return splits
 
 
 def _compute_score(search_results: list, holdout_results: list) -> dict:
