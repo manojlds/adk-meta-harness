@@ -49,6 +49,9 @@ class TemporalOptimizeInput:
     model: str | None = None
     iterations: int = 10
     holdout_ratio: float = 0.3
+    test_ratio: float = 0.2
+    split_seed: int = 42
+    run_id: str | None = None
     candidates_dir: str | None = None
     judge: str = "litellm"
     judge_model: str | None = None
@@ -63,6 +66,9 @@ class TemporalOptimizeInput:
             "model": self.model,
             "iterations": self.iterations,
             "holdout_ratio": self.holdout_ratio,
+            "test_ratio": self.test_ratio,
+            "split_seed": self.split_seed,
+            "run_id": self.run_id,
             "candidates_dir": self.candidates_dir,
             "judge": self.judge,
             "judge_model": self.judge_model,
@@ -79,6 +85,9 @@ class TemporalOptimizeInput:
             model=_optional_str(payload.get("model")),
             iterations=int(payload.get("iterations", 10)),
             holdout_ratio=float(payload.get("holdout_ratio", 0.3)),
+            test_ratio=float(payload.get("test_ratio", 0.2)),
+            split_seed=int(payload.get("split_seed", 42)),
+            run_id=_optional_str(payload.get("run_id")),
             candidates_dir=_optional_str(payload.get("candidates_dir")),
             judge=str(payload.get("judge", "litellm")),
             judge_model=_optional_str(payload.get("judge_model")),
@@ -91,16 +100,20 @@ class TemporalOptimizeOutput:
     best_candidate_path: str
     best_holdout: float
     best_search: float
+    best_test: float | None
     iterations_completed: int
     candidates_dir: str
+    run_id: str
 
     def to_payload(self) -> dict[str, Any]:
         return {
             "best_candidate_path": self.best_candidate_path,
             "best_holdout": self.best_holdout,
             "best_search": self.best_search,
+            "best_test": self.best_test,
             "iterations_completed": self.iterations_completed,
             "candidates_dir": self.candidates_dir,
+            "run_id": self.run_id,
         }
 
     @classmethod
@@ -109,8 +122,10 @@ class TemporalOptimizeOutput:
             best_candidate_path=str(payload["best_candidate_path"]),
             best_holdout=float(payload["best_holdout"]),
             best_search=float(payload["best_search"]),
+            best_test=_optional_float(payload.get("best_test")),
             iterations_completed=int(payload["iterations_completed"]),
             candidates_dir=str(payload["candidates_dir"]),
+            run_id=str(payload.get("run_id", "")),
         )
 
 
@@ -133,6 +148,9 @@ if _TEMPORAL_AVAILABLE:
             model=optimize_input.model or "gemini-2.5-flash",
             iterations=optimize_input.iterations,
             holdout_ratio=optimize_input.holdout_ratio,
+            test_ratio=optimize_input.test_ratio,
+            split_seed=optimize_input.split_seed,
+            run_id=optimize_input.run_id,
             candidates_dir=Path(optimize_input.candidates_dir)
             if optimize_input.candidates_dir
             else None,
@@ -149,8 +167,10 @@ if _TEMPORAL_AVAILABLE:
             best_candidate_path=str(result.best_candidate.path),
             best_holdout=result.best_holdout,
             best_search=result.best_search,
+            best_test=result.best_test,
             iterations_completed=result.iterations_completed,
             candidates_dir=str(result.candidates_dir),
+            run_id=result.run_id,
         ).to_payload()
 
     @workflow.defn
@@ -179,6 +199,12 @@ def _optional_str(value: Any) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    return float(value)
 
 
 def _default_workflow_id() -> str:
