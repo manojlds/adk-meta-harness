@@ -12,7 +12,6 @@ This is the heart of adk-meta-harness. Following the Meta-Harness paper:
 from __future__ import annotations
 
 import json
-import shutil
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,13 +22,22 @@ from adk_meta_harness.candidate import (
     CandidateDiff,
     create_candidate,
     discover_candidates,
-    find_best_candidate,
     init_candidates_dir,
     max_version,
 )
 from adk_meta_harness.gate import gate_decision
 from adk_meta_harness.learnings import Learnings
 from adk_meta_harness.proposer import get_proposer
+from adk_meta_harness.run_artifacts import (
+    append_evolution_row,
+    completed_iterations,
+    init_run_artifacts,
+    latest_final_test_score,
+    load_frontier,
+    read_evolution_rows,
+    update_frontier,
+    write_pending_eval,
+)
 from adk_meta_harness.splits import TaskSplits, split_task_names
 from adk_meta_harness.task import discover_tasks
 from adk_meta_harness.validate import validate_candidate
@@ -72,10 +80,10 @@ class OptimizeResult:
 async def optimize(config: OptimizeConfig) -> OptimizeResult:
     """Run the meta-harness optimization loop.
 
-    Supports resuming a crashed or interrupted run.  If candidates_dir
-    already contains evaluated candidates with ``meta.json``, the loop
-    picks up from the last completed iteration instead of re-running
-    the baseline and prior iterations.
+    Supports resuming a crashed or interrupted run via run-scoped
+    artifacts in ``candidates/runs/<run_id>/``. If frontier/evolution
+    artifacts are present for the run, the loop resumes from the last
+    completed iteration instead of re-running baseline and prior steps.
 
     Args:
         config: Optimization configuration.
@@ -83,16 +91,15 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
     Returns:
         OptimizeResult with the best candidate and full history.
     """
-    candidates_dir = config.candidates_dir or config.dataset / "candidates"
-    candidates_dir.mkdir(parents=True, exist_ok=True)
+    candidates_root_dir = config.candidates_dir or config.dataset / "candidates"
+    candidates_root_dir.mkdir(parents=True, exist_ok=True)
 
     run_id = config.run_id or _default_run_id()
-    run_dir = candidates_dir / "runs" / run_id
-    run_dir.mkdir(parents=True, exist_ok=True)
+    artifacts = init_run_artifacts(candidates_root_dir, run_id)
 
     all_task_names = [task.name for task in discover_tasks(config.dataset)]
     task_splits = _load_or_create_task_splits(
-        run_dir=run_dir,
+        run_dir=artifacts.run_dir,
         task_names=all_task_names,
         holdout_ratio=config.holdout_ratio,
         test_ratio=config.test_ratio,
@@ -110,50 +117,37 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
 
     task_runner = get_runner(config.runner, **(config.runner_kwargs or {}))
     proposer = get_proposer(config.proposer, model=config.proposer_model)
-    learnings = Learnings(candidates_dir / "learnings.md")
+    learnings = Learnings(artifacts.run_dir / "learnings.md")
 
-    # --- Resume detection ---
-    existing = discover_candidates(candidates_dir)
+    existing = discover_candidates(artifacts.candidates_dir)
+    rows = read_evolution_rows(artifacts)
+    all_results = _results_from_evolution_rows(rows)
+    iterations_completed = completed_iterations(rows)
+    start_iteration = iterations_completed + 1
+    best_test: float | None = latest_final_test_score(rows)
+    best_candidate_changed = False
+
+    frontier = load_frontier(artifacts)
     resumed = False
-    start_iteration = 1
-
-    if existing:
-        best_prior = find_best_candidate(existing)
-        if best_prior is not None and best_prior.diff is not None:
-            # We have evaluated candidates — resume from here.
-            best_candidate = best_prior
-            best_holdout = best_prior.diff.holdout_score or 0.0
-            best_search = best_prior.diff.search_score or 0.0
-            # Use learnings.md as the source of truth for completed
-            # iterations.  It includes validation-failed iterations
-            # (whose dirs are deleted) and excludes interrupted ones
-            # (that never wrote a learning entry).
-            completed = learnings.completed_iterations()
-            start_iteration = completed + 1
-            # Collect score dicts for already-completed candidates.
-            all_results = []
-            for c in existing:
-                if c.diff is not None and c.diff.kept is not None:
-                    all_results.append(
-                        {
-                            "combined": c.diff.score or 0.0,
-                            "search": c.diff.search_score or 0.0,
-                            "holdout": c.diff.holdout_score or 0.0,
-                            "passed": c.diff.passed,
-                            "total": c.diff.total,
-                        }
+    if frontier:
+        best_payload = frontier.get("best")
+        if isinstance(best_payload, dict):
+            candidate_path = best_payload.get("candidate_path")
+            if candidate_path:
+                best_path = Path(str(candidate_path))
+                if (best_path / "meta.json").exists():
+                    best_candidate = Candidate.load_meta(best_path)
+                    best_holdout = float(best_payload.get("holdout_score", 0.0))
+                    best_search = float(best_payload.get("search_score", 0.0))
+                    resumed = True
+                    print(
+                        f"Resuming run {run_id} at iteration {start_iteration} "
+                        f"(best v{best_candidate.version}, holdout={best_holdout:.4f})"
                     )
-            resumed = True
-            print(
-                f"Resuming from iteration {start_iteration} "
-                f"({completed} prior iterations found, "
-                f"best v{best_candidate.version} "
-                f"holdout={best_holdout:.4f})"
-            )
 
     if not resumed:
         # Fresh run — initialize baseline candidate
-        baseline = init_candidates_dir(candidates_dir, config.initial_harness)
+        baseline = init_candidates_dir(artifacts.candidates_dir, config.initial_harness)
         print(f"[v{baseline.version}] Baseline harness initialized")
 
         # Evaluate baseline
@@ -185,7 +179,25 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
         )
         baseline.write_meta()
         _link_traces_to_candidate(baseline.path)
-        _append_results(candidates_dir, baseline.diff)
+        append_evolution_row(
+            artifacts,
+            {
+                "iteration": 0,
+                "status": "baseline",
+                "version": baseline.version,
+                "parent_version": baseline.parent_version,
+                "candidate_path": str(baseline.path.resolve()),
+                "description": "Initial baseline",
+                "change_type": "baseline",
+                "combined_score": baseline_score["combined"],
+                "search_score": search_score,
+                "holdout_score": holdout_score,
+                "passed": baseline_score["passed"],
+                "total": baseline_score["total"],
+                "gate_kept": True,
+                "gate_reason": "Baseline candidate",
+            },
+        )
         learnings.add(
             iteration=0,
             description="Baseline evaluation",
@@ -199,9 +211,22 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
         best_holdout = holdout_score
         best_search = search_score
         all_results = [baseline_score]
+        iterations_completed = 0
+        start_iteration = 1
+        best_candidate_changed = True
+        update_frontier(
+            artifacts,
+            _frontier_payload(
+                best_candidate=best_candidate,
+                best_holdout=best_holdout,
+                best_search=best_search,
+                best_test=best_test,
+                iterations_completed=iterations_completed,
+            ),
+        )
 
-    # Determine the next version number (may be non-contiguous after
-    # prior runs with discarded candidates).
+    # Determine the next version number within this run.
+    existing = discover_candidates(artifacts.candidates_dir)
     next_version = max_version(existing) + 1 if existing else 1
 
     for iteration in range(start_iteration, config.iterations + 1):
@@ -209,7 +234,7 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
 
         new_version = next_version + (iteration - start_iteration)
         new_candidate = create_candidate(
-            candidates_dir=candidates_dir,
+            candidates_dir=artifacts.candidates_dir,
             source=best_candidate.path,
             version=new_version,
             parent_version=best_candidate.version,
@@ -223,12 +248,28 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
         print(f"  Proposing edit with {proposer.name}...")
         edit_result = await proposer.propose_edit(
             candidate_dir=new_candidate.path,
-            filesystem_dir=candidates_dir,
+            filesystem_dir=artifacts.run_dir,
             learnings=learnings.get_content(),
             instruction=instruction,
         )
         print(f"  Change: {edit_result.get('description', 'N/A')}")
         print(f"  Type: {edit_result.get('change_type', 'N/A')}")
+        write_pending_eval(
+            artifacts,
+            {
+                "iteration": iteration,
+                "parent_version": best_candidate.version,
+                "candidate": {
+                    "version": new_candidate.version,
+                    "path": str(new_candidate.path.resolve()),
+                },
+                "proposal": {
+                    "description": edit_result.get("description", ""),
+                    "change_type": edit_result.get("change_type", "unknown"),
+                    "diff_summary": edit_result.get("diff_summary", ""),
+                },
+            },
+        )
 
         # Clear proposer-injected files from the candidate before eval
         _cleanup_proposer_files(new_candidate.path)
@@ -250,7 +291,28 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
                 kept=False,
             )
             new_candidate.write_meta()
-            _append_results(candidates_dir, new_candidate.diff)
+            append_evolution_row(
+                artifacts,
+                {
+                    "iteration": iteration,
+                    "status": "validation_failed",
+                    "version": new_candidate.version,
+                    "parent_version": new_candidate.parent_version,
+                    "candidate_path": str(new_candidate.path.resolve()),
+                    "description": edit_result.get("description", ""),
+                    "change_type": edit_result.get("change_type", "unknown"),
+                    "diff_summary": edit_result.get("diff_summary", ""),
+                    "combined_score": 0.0,
+                    "search_score": 0.0,
+                    "holdout_score": 0.0,
+                    "passed": 0,
+                    "total": 0,
+                    "validation_status": "failed",
+                    "validation_errors": validation.errors,
+                    "gate_kept": False,
+                    "gate_reason": "Validation failed",
+                },
+            )
             learnings.add(
                 iteration=iteration,
                 description=f"VALIDATION FAILED: {'; '.join(validation.errors[:3])}",
@@ -259,7 +321,6 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
                 search_score=0.0,
                 failure_patterns=[f"validation: {e}" for e in validation.errors],
             )
-            shutil.rmtree(new_candidate.path, ignore_errors=True)
             all_results.append(
                 {
                     "combined": 0.0,
@@ -269,6 +330,7 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
                     "total": 0,
                 }
             )
+            iterations_completed = iteration
             continue
         if validation.warnings:
             for warn in validation.warnings:
@@ -317,7 +379,29 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
             kept=gate.kept,
         )
         new_candidate.write_meta()
-        _append_results(candidates_dir, new_candidate.diff)
+        append_evolution_row(
+            artifacts,
+            {
+                "iteration": iteration,
+                "status": "kept" if gate.kept else "discarded",
+                "version": new_candidate.version,
+                "parent_version": new_candidate.parent_version,
+                "candidate_path": str(new_candidate.path.resolve()),
+                "description": edit_result.get("description", ""),
+                "change_type": edit_result.get("change_type", "unknown"),
+                "diff_summary": edit_result.get("diff_summary", ""),
+                "combined_score": proposed_score["combined"],
+                "search_score": proposed_search,
+                "holdout_score": proposed_holdout,
+                "passed": proposed_score["passed"],
+                "total": proposed_score["total"],
+                "validation_status": "passed",
+                "gate_kept": gate.kept,
+                "gate_reason": gate.reason,
+                "search_delta": gate.search_delta,
+                "holdout_delta": gate.holdout_delta,
+            },
+        )
 
         print(f"  Holdout: {proposed_holdout:.4f} (prev: {best_holdout:.4f})")
         print(f"  Search: {proposed_search:.4f} (prev: {best_search:.4f})")
@@ -339,15 +423,29 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
             best_candidate = new_candidate
             best_holdout = proposed_holdout
             best_search = proposed_search
+            best_candidate_changed = True
+            update_frontier(
+                artifacts,
+                _frontier_payload(
+                    best_candidate=best_candidate,
+                    best_holdout=best_holdout,
+                    best_search=best_search,
+                    best_test=best_test,
+                    iterations_completed=iteration,
+                ),
+            )
         else:
             # Keep discarded candidates on disk so the proposer can
             # learn from failed attempts (traces, diffs, scores).
             pass
 
         all_results.append(proposed_score)
+        iterations_completed = iteration
 
-    best_test: float | None = None
-    if task_splits.test_task_names:
+    should_run_final_test = bool(task_splits.test_task_names) and (
+        best_test is None or best_candidate_changed
+    )
+    if should_run_final_test:
         print(f"\n=== Final test evaluation ({len(task_splits.test_task_names)} tasks) ===")
         final_output = await task_runner.evaluate(
             candidate_dir=best_candidate.path,
@@ -361,14 +459,38 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
         final_score = _compute_score(final_output.search_results, [])
         best_test = final_score["search"]
         print(f"  Final test: {best_test:.4f}")
+        append_evolution_row(
+            artifacts,
+            {
+                "iteration": iterations_completed,
+                "status": "final_test",
+                "version": best_candidate.version,
+                "candidate_path": str(best_candidate.path.resolve()),
+                "test_score": best_test,
+                "task_count": len(task_splits.test_task_names),
+            },
+        )
+    elif best_test is not None:
+        print(f"\nFinal test already recorded: {best_test:.4f}")
+
+    update_frontier(
+        artifacts,
+        _frontier_payload(
+            best_candidate=best_candidate,
+            best_holdout=best_holdout,
+            best_search=best_search,
+            best_test=best_test,
+            iterations_completed=iterations_completed,
+        ),
+    )
 
     return OptimizeResult(
         best_candidate=best_candidate,
         best_holdout=best_holdout,
         best_search=best_search,
         best_test=best_test,
-        iterations_completed=config.iterations,
-        candidates_dir=candidates_dir,
+        iterations_completed=iterations_completed,
+        candidates_dir=artifacts.candidates_dir,
         run_id=run_id,
         all_results=all_results,
     )
@@ -406,6 +528,47 @@ def _load_or_create_task_splits(
     }
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True))
     return splits
+
+
+def _results_from_evolution_rows(rows: list[dict]) -> list[dict]:
+    statuses = {"baseline", "validation_failed", "kept", "discarded"}
+    results: list[dict] = []
+    for row in rows:
+        if row.get("status") not in statuses:
+            continue
+        try:
+            results.append(
+                {
+                    "combined": float(row.get("combined_score", 0.0)),
+                    "search": float(row.get("search_score", 0.0)),
+                    "holdout": float(row.get("holdout_score", 0.0)),
+                    "passed": int(row.get("passed", 0)),
+                    "total": int(row.get("total", 0)),
+                }
+            )
+        except (TypeError, ValueError):
+            continue
+    return results
+
+
+def _frontier_payload(
+    *,
+    best_candidate: Candidate,
+    best_holdout: float,
+    best_search: float,
+    best_test: float | None,
+    iterations_completed: int,
+) -> dict:
+    return {
+        "iterations_completed": iterations_completed,
+        "best_test": best_test,
+        "best": {
+            "version": best_candidate.version,
+            "candidate_path": str(best_candidate.path.resolve()),
+            "holdout_score": best_holdout,
+            "search_score": best_search,
+        },
+    }
 
 
 def _compute_score(search_results: list, holdout_results: list) -> dict:
@@ -449,19 +612,6 @@ def _build_proposer_instruction(iteration: int, best_score: float, learnings: Le
         "After your change, the harness will be evaluated on a holdout set "
         "that you cannot see. Overfitting to specific tasks will be penalized."
     )
-
-
-def _append_results(candidates_dir: Path, diff: CandidateDiff) -> None:
-    """Append a row to results.tsv."""
-    results_path = candidates_dir / "results.tsv"
-    kept_str = "keep" if diff.kept else "discard" if diff.kept is not None else "pending"
-    row = (
-        f"{diff.creation_path.name}\t{diff.score:.4f}\t{diff.holdout_score:.4f}\t"
-        f"{diff.search_score:.4f}\t{diff.passed}/{diff.total}\t"
-        f"{kept_str}\t{diff.description}\n"
-    )
-    with open(results_path, "a") as f:
-        f.write(row)
 
 
 def _count_harness_files(candidate_dir: Path) -> int:
