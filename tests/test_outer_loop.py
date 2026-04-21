@@ -292,3 +292,100 @@ async def test_optimize_uses_search_holdout_splits_and_runs_final_test_once(
     assert split_manifest.exists()
     payload = json.loads(split_manifest.read_text())
     assert payload["splits"]["seed"] == 123
+
+    run_dir = tmp_path / "candidates" / "runs" / "phase1-test"
+    assert (run_dir / "pending_eval.json").exists()
+    assert (run_dir / "frontier_val.json").exists()
+    assert (run_dir / "evolution_summary.jsonl").exists()
+    lines = (run_dir / "evolution_summary.jsonl").read_text().strip().splitlines()
+    statuses = [json.loads(line)["status"] for line in lines]
+    assert statuses[0] == "baseline"
+    assert "final_test" in statuses
+
+
+@pytest.mark.asyncio
+async def test_optimize_resume_uses_run_artifacts_without_rerunning_eval(monkeypatch, tmp_path):
+    dataset = tmp_path / "tasks"
+    dataset.mkdir()
+    for i in range(8):
+        task_dir = dataset / f"task-{i:02d}"
+        task_dir.mkdir()
+        (task_dir / "instruction.md").write_text("Do task")
+
+    initial_harness = tmp_path / "initial_harness"
+    initial_harness.mkdir()
+    (initial_harness / "agent.py").write_text("agent = object()\nroot_agent = agent\n")
+    (initial_harness / "system_prompt.md").write_text("You are an agent")
+    (initial_harness / "config.yaml").write_text("model: gemini-2.5-flash\n")
+
+    class FakeRunner:
+        def __init__(self):
+            self.calls: list[dict] = []
+
+        async def evaluate(self, **kwargs):
+            self.calls.append(kwargs)
+            search_names = kwargs.get("search_task_names") or []
+            holdout_names = kwargs.get("holdout_task_names") or []
+            return EvalOutput(
+                search_results=[
+                    EvalResult(task_name=name, passed=True, score=1.0) for name in search_names
+                ],
+                holdout_results=[
+                    EvalResult(task_name=name, passed=True, score=1.0) for name in holdout_names
+                ],
+            )
+
+    class FakeProposer:
+        name = "fake"
+
+        async def propose_edit(self, **kwargs):
+            return {
+                "description": "no-op",
+                "change_type": "harness",
+            }
+
+    fake_runner = FakeRunner()
+    monkeypatch.setattr("adk_meta_harness.runner.get_runner", lambda *_a, **_k: fake_runner)
+    monkeypatch.setattr(
+        "adk_meta_harness.outer_loop.get_proposer", lambda *_a, **_k: FakeProposer()
+    )
+    monkeypatch.setattr(
+        "adk_meta_harness.outer_loop.validate_candidate",
+        lambda *_a, **_k: ValidationResult(valid=True),
+    )
+
+    await optimize(
+        OptimizeConfig(
+            dataset=dataset,
+            initial_harness=initial_harness,
+            proposer="opencode",
+            model="gemini-2.5-flash",
+            iterations=1,
+            holdout_ratio=0.25,
+            test_ratio=0.25,
+            split_seed=7,
+            candidates_dir=tmp_path / "candidates",
+            run_id="resume-test",
+        )
+    )
+    assert len(fake_runner.calls) == 3
+
+    fake_runner.calls.clear()
+    resumed = await optimize(
+        OptimizeConfig(
+            dataset=dataset,
+            initial_harness=initial_harness,
+            proposer="opencode",
+            model="gemini-2.5-flash",
+            iterations=1,
+            holdout_ratio=0.25,
+            test_ratio=0.25,
+            split_seed=7,
+            candidates_dir=tmp_path / "candidates",
+            run_id="resume-test",
+        )
+    )
+
+    assert fake_runner.calls == []
+    assert resumed.iterations_completed == 1
+    assert resumed.best_test == 1.0
