@@ -201,3 +201,30 @@ def test_optimize_rejects_negative_ratio(monkeypatch, tmp_path, capsys):
 
     err = capsys.readouterr().err
     assert "must be non-negative" in err
+
+
+def test_optimize_rejects_nan_ratio(monkeypatch, tmp_path, capsys):
+    dataset = tmp_path / "tasks"
+    harness = tmp_path / "harness"
+    dataset.mkdir()
+    harness.mkdir()
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "amh",
+            "optimize",
+            "--dataset",
+            str(dataset),
+            "--initial-harness",
+            str(harness),
+            "--holdout-ratio",
+            "nan",
+        ],
+    )
+
+    with pytest.raises(SystemExit):
+        main()
+
+    err = capsys.readouterr().err
+    assert "must be finite numbers" in err

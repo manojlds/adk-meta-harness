@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import math
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -204,6 +205,8 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "optimize":
+        if not math.isfinite(args.holdout_ratio) or not math.isfinite(args.test_ratio):
+            parser.error("--holdout-ratio and --test-ratio must be finite numbers")
         if args.holdout_ratio < 0.0:
             parser.error("--holdout-ratio must be non-negative")
         if args.test_ratio < 0.0:
