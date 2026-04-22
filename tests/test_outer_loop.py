@@ -297,7 +297,7 @@ async def test_optimize_uses_search_holdout_splits_and_runs_final_test_once(
     assert payload["splits"]["seed"] == 123
 
     run_dir = tmp_path / "candidates" / "runs" / "phase1-test"
-    assert (run_dir / "pending_eval.json").exists()
+    assert not (run_dir / "pending_eval.json").exists()
     assert (run_dir / "frontier_val.json").exists()
     assert (run_dir / "evolution_summary.jsonl").exists()
     lines = (run_dir / "evolution_summary.jsonl").read_text().strip().splitlines()
