@@ -111,6 +111,7 @@ def _validate_ratios(holdout_ratio: float, test_ratio: float) -> None:
 
 
 def _ratio_count(total: int, ratio: float) -> int:
+    """Compute count from ratio using half-up rounding (0.5 rounds up)."""
     return int(total * ratio + 0.5)
 
 

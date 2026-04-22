@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import re
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 load_dotenv()
+RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 def main() -> None:
@@ -202,6 +204,11 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "optimize":
+        if args.holdout_ratio + args.test_ratio >= 1.0:
+            parser.error("--holdout-ratio + --test-ratio must be < 1.0")
+        if args.run_id is not None and not RUN_ID_PATTERN.fullmatch(args.run_id):
+            parser.error("Invalid --run-id. Must match [A-Za-z0-9._-].")
+
         if args.runner == "temporal":
             from adk_meta_harness.runner.temporal_runner import (
                 TemporalOptimizeInput,
