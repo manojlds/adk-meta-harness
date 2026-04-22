@@ -98,7 +98,7 @@ def read_evolution_rows(artifacts: RunArtifacts) -> list[dict[str, Any]]:
     return rows
 
 
-def completed_iterations(rows: list[dict[str, Any]]) -> int:
+def max_completed_iteration(rows: list[dict[str, Any]]) -> int:
     completed = 0
     for row in rows:
         status = str(row.get("status", ""))
@@ -111,6 +111,11 @@ def completed_iterations(rows: list[dict[str, Any]]) -> int:
         if iteration > completed:
             completed = iteration
     return completed
+
+
+def completed_iterations(rows: list[dict[str, Any]]) -> int:
+    """Backward-compatible alias for max_completed_iteration()."""
+    return max_completed_iteration(rows)
 
 
 def latest_final_test_score(rows: list[dict[str, Any]]) -> float | None:

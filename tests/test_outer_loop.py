@@ -445,3 +445,24 @@ def test_load_or_create_task_splits_rejects_parameter_mismatch(tmp_path):
             test_ratio=0.2,
             split_seed=42,
         )
+
+
+def test_load_or_create_task_splits_rejects_empty_cached_task_names(tmp_path):
+    run_dir = tmp_path / "runs" / "same-run"
+    run_dir.mkdir(parents=True)
+
+    splits = split_task_names(["task-a", "task-b"], holdout_ratio=0.3, test_ratio=0.2, seed=42)
+    payload = {
+        "task_names": [],
+        "splits": splits.to_dict(),
+    }
+    (run_dir / "task_splits.json").write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError, match="does not match current dataset"):
+        _load_or_create_task_splits(
+            run_dir=run_dir,
+            task_names=["task-a", "task-b"],
+            holdout_ratio=0.3,
+            test_ratio=0.2,
+            split_seed=42,
+        )

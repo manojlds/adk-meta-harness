@@ -31,10 +31,10 @@ from adk_meta_harness.learnings import Learnings
 from adk_meta_harness.proposer import get_proposer
 from adk_meta_harness.run_artifacts import (
     append_evolution_row,
-    completed_iterations,
     init_run_artifacts,
     latest_final_test_score,
     load_frontier,
+    max_completed_iteration,
     read_evolution_rows,
     update_frontier,
     write_pending_eval,
@@ -123,7 +123,7 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
     existing = discover_candidates(artifacts.candidates_dir)
     rows = read_evolution_rows(artifacts)
     all_results = _results_from_evolution_rows(rows)
-    iterations_completed = completed_iterations(rows)
+    iterations_completed = max_completed_iteration(rows)
     start_iteration = iterations_completed + 1
     best_test: float | None = latest_final_test_score(rows)
     best_candidate_changed = False
@@ -460,7 +460,8 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
             judge=config.judge,
         )
         final_score = _compute_score(final_output.search_results, [])
-        best_test = final_score["search"]
+        test_score_from_search = final_score["search"]
+        best_test = test_score_from_search
         print(f"  Final test: {best_test:.4f}")
         append_evolution_row(
             artifacts,
@@ -531,7 +532,7 @@ def _load_or_create_task_splits(
                 "(holdout_ratio/test_ratio/split_seed). Use a new run_id."
             )
             raise ValueError(msg)
-        if cached_task_names_set and cached_task_names_set != normalized_task_names:
+        if cached_task_names_set != normalized_task_names:
             msg = (
                 "Existing task_splits.json does not match current dataset task names. "
                 "Use a new run_id for changed task sets."
