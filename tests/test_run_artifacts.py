@@ -6,10 +6,10 @@ import pytest
 
 from adk_meta_harness.run_artifacts import (
     append_evolution_row,
-    completed_iterations,
     init_run_artifacts,
     latest_final_test_score,
     load_frontier,
+    max_completed_iteration,
     read_evolution_rows,
     update_frontier,
     write_pending_eval,
@@ -66,7 +66,7 @@ def test_frontier_pending_and_evolution_roundtrip(tmp_path):
 
     assert len(rows) == 3
     assert rows[0]["status"] == "baseline"
-    assert completed_iterations(rows) == 1
+    assert max_completed_iteration(rows) == 1
     assert latest_final_test_score(rows) == 0.75
 
 
