@@ -468,6 +468,33 @@ def test_load_or_create_task_splits_rejects_empty_cached_task_names(tmp_path):
         )
 
 
+def test_load_or_create_task_splits_accepts_small_float_drift(tmp_path):
+    run_dir = tmp_path / "runs" / "same-run"
+    run_dir.mkdir(parents=True)
+
+    splits = split_task_names(["task-a", "task-b"], holdout_ratio=0.3, test_ratio=0.2, seed=42)
+    payload = {
+        "task_names": ["task-a", "task-b"],
+        "splits": {
+            **splits.to_dict(),
+            "holdout_ratio": 0.30000000000000004,
+            "test_ratio": 0.20000000000000004,
+        },
+    }
+    (run_dir / "task_splits.json").write_text(json.dumps(payload))
+
+    loaded = _load_or_create_task_splits(
+        run_dir=run_dir,
+        task_names=["task-a", "task-b"],
+        holdout_ratio=0.3,
+        test_ratio=0.2,
+        split_seed=42,
+    )
+
+    assert loaded.seed == 42
+    assert loaded.search_task_names
+
+
 @pytest.mark.asyncio
 async def test_optimize_refuses_reset_when_frontier_invalid_with_existing_state(
     monkeypatch,

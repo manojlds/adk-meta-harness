@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from math import isclose
 from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -483,9 +484,7 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
             holdout_task_names=[],
             judge=config.judge,
         )
-        final_score = _compute_score(final_output.search_results, [])
-        test_score_from_search = final_score["search"]
-        best_test = test_score_from_search
+        best_test = _compute_test_score(final_output.search_results)
         print(f"  Final test: {best_test:.4f}")
         append_evolution_row(
             artifacts,
@@ -525,6 +524,7 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
 
 
 def _default_run_id() -> str:
+    """Create a collision-resistant default run identifier."""
     ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     return f"{ts}-{uuid4().hex[:8]}"
 
@@ -537,6 +537,12 @@ def _load_or_create_task_splits(
     test_ratio: float,
     split_seed: int,
 ) -> TaskSplits:
+    """Load cached task splits or create them for this run.
+
+    Existing manifests are treated as immutable run state: if task names,
+    ratios, or seed differ from the requested values, this raises
+    ``ValueError`` and asks callers to use a new run ID.
+    """
     manifest_path = run_dir / "task_splits.json"
     normalized_task_names = sorted({name for name in task_names if name})
 
@@ -546,9 +552,20 @@ def _load_or_create_task_splits(
         cached_task_names = payload.get("task_names", []) if isinstance(payload, dict) else []
         cached_task_names_set = sorted({str(name) for name in cached_task_names if name})
         cached_splits = TaskSplits.from_dict(splits_payload)
+        ratio_tolerance = 1e-9
         if (
-            cached_splits.holdout_ratio != holdout_ratio
-            or cached_splits.test_ratio != test_ratio
+            not isclose(
+                cached_splits.holdout_ratio,
+                holdout_ratio,
+                rel_tol=0.0,
+                abs_tol=ratio_tolerance,
+            )
+            or not isclose(
+                cached_splits.test_ratio,
+                test_ratio,
+                rel_tol=0.0,
+                abs_tol=ratio_tolerance,
+            )
             or cached_splits.seed != split_seed
         ):
             msg = (
@@ -581,6 +598,10 @@ def _load_or_create_task_splits(
 
 
 def _results_from_evolution_rows(rows: list[dict]) -> list[dict]:
+    """Build score history from terminal candidate evaluation rows.
+
+    Ignores non-candidate statuses such as ``final_test``.
+    """
     statuses = {"baseline", "validation_failed", "kept", "discarded"}
     results: list[dict] = []
     for row in rows:
@@ -609,6 +630,7 @@ def _frontier_payload(
     best_test: float | None,
     iterations_completed: int,
 ) -> dict:
+    """Serialize current frontier state for run-level persistence."""
     return {
         "iterations_completed": iterations_completed,
         "best_test": best_test,
@@ -646,6 +668,11 @@ def _compute_score(search_results: list, holdout_results: list) -> dict:
         "passed": passed,
         "total": total,
     }
+
+
+def _compute_test_score(test_results: list) -> float:
+    """Compute score for final test-only evaluation results."""
+    return _compute_score(test_results, [])["search"]
 
 
 def _build_proposer_instruction(iteration: int, best_score: float, learnings: Learnings) -> str:

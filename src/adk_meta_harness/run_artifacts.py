@@ -31,7 +31,7 @@ class RunArtifacts:
 
 
 def init_run_artifacts(root_dir: Path, run_id: str) -> RunArtifacts:
-    run_id = _sanitize_run_id(run_id)
+    run_id = validate_run_id(run_id)
     run_dir = root_dir / "runs" / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -162,7 +162,7 @@ def _utc_now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def _sanitize_run_id(run_id: str) -> str:
+def validate_run_id(run_id: str) -> str:
     candidate = run_id.strip()
     if candidate in {"", ".", ".."}:
         msg = f"Invalid run_id: {run_id!r}"

@@ -71,9 +71,10 @@ def test_frontier_pending_and_evolution_roundtrip(tmp_path):
     assert latest_final_test_score(rows) == 0.75
 
 
-def test_init_run_artifacts_rejects_unsafe_run_id(tmp_path):
+@pytest.mark.parametrize("run_id", ["../../etc", "..", "."])
+def test_init_run_artifacts_rejects_unsafe_run_id(tmp_path, run_id):
     with pytest.raises(ValueError, match="Invalid run_id"):
-        init_run_artifacts(tmp_path / "candidates", "../../etc")
+        init_run_artifacts(tmp_path / "candidates", run_id)
 
 
 def test_reset_run_state_clears_mutable_artifacts_and_candidates(tmp_path):
