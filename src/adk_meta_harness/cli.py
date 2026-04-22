@@ -10,13 +10,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import re
 from pathlib import Path
 
 from dotenv import load_dotenv
 
+from adk_meta_harness.run_artifacts import validate_run_id
+
 load_dotenv()
-RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 def main() -> None:
@@ -122,7 +122,7 @@ def main() -> None:
         default=None,
         help=(
             "Optional run ID for writing split artifacts under candidates/runs/<run-id>. "
-            "Must match [A-Za-z0-9._-]."
+            "Must match [A-Za-z0-9._-] and cannot be '.' or '..'."
         ),
     )
     opt.add_argument(
@@ -210,8 +210,13 @@ def main() -> None:
             parser.error("--holdout-ratio and --test-ratio must each be < 1.0")
         if args.holdout_ratio + args.test_ratio >= 1.0:
             parser.error("--holdout-ratio + --test-ratio must be < 1.0")
-        if args.run_id is not None and not RUN_ID_PATTERN.fullmatch(args.run_id):
-            parser.error("Invalid --run-id. Must match [A-Za-z0-9._-].")
+        if args.run_id is not None:
+            try:
+                validate_run_id(args.run_id)
+            except ValueError:
+                parser.error(
+                    "Invalid --run-id. Must match [A-Za-z0-9._-] and cannot be '.' or '..'."
+                )
 
         if args.runner == "temporal":
             from adk_meta_harness.runner.temporal_runner import (

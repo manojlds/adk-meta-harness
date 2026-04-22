@@ -148,7 +148,8 @@ def test_optimize_rejects_invalid_ratio_combination(monkeypatch, tmp_path, capsy
     assert "must be < 1.0" in err
 
 
-def test_optimize_rejects_invalid_run_id(monkeypatch, tmp_path, capsys):
+@pytest.mark.parametrize("run_id", ["../bad", "..", "."])
+def test_optimize_rejects_invalid_run_id(monkeypatch, tmp_path, capsys, run_id):
     dataset = tmp_path / "tasks"
     harness = tmp_path / "harness"
     dataset.mkdir()
@@ -164,7 +165,7 @@ def test_optimize_rejects_invalid_run_id(monkeypatch, tmp_path, capsys):
             "--initial-harness",
             str(harness),
             "--run-id",
-            "../bad",
+            run_id,
         ],
     )
 
