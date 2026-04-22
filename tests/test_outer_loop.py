@@ -423,3 +423,25 @@ def test_load_or_create_task_splits_rejects_dataset_mismatch(tmp_path):
             test_ratio=0.2,
             split_seed=42,
         )
+
+
+def test_load_or_create_task_splits_rejects_parameter_mismatch(tmp_path):
+    run_dir = tmp_path / "runs" / "same-run"
+    run_dir.mkdir(parents=True)
+
+    _load_or_create_task_splits(
+        run_dir=run_dir,
+        task_names=["task-a", "task-b"],
+        holdout_ratio=0.3,
+        test_ratio=0.2,
+        split_seed=42,
+    )
+
+    with pytest.raises(ValueError, match="different split parameters"):
+        _load_or_create_task_splits(
+            run_dir=run_dir,
+            task_names=["task-a", "task-b"],
+            holdout_ratio=0.4,
+            test_ratio=0.2,
+            split_seed=42,
+        )

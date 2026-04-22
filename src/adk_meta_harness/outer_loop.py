@@ -520,13 +520,24 @@ def _load_or_create_task_splits(
         splits_payload = payload.get("splits", payload)
         cached_task_names = payload.get("task_names", []) if isinstance(payload, dict) else []
         cached_task_names_set = sorted({str(name) for name in cached_task_names if name})
+        cached_splits = TaskSplits.from_dict(splits_payload)
+        if (
+            cached_splits.holdout_ratio != holdout_ratio
+            or cached_splits.test_ratio != test_ratio
+            or cached_splits.seed != split_seed
+        ):
+            msg = (
+                "Existing task_splits.json uses different split parameters "
+                "(holdout_ratio/test_ratio/split_seed). Use a new run_id."
+            )
+            raise ValueError(msg)
         if cached_task_names_set and cached_task_names_set != normalized_task_names:
             msg = (
                 "Existing task_splits.json does not match current dataset task names. "
                 "Use a new run_id for changed task sets."
             )
             raise ValueError(msg)
-        return TaskSplits.from_dict(splits_payload)
+        return cached_splits
 
     splits = split_task_names(
         normalized_task_names,
