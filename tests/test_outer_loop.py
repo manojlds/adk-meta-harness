@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from unittest.mock import MagicMock
 
 import pytest
@@ -12,8 +13,10 @@ from adk_meta_harness.outer_loop import (
     _cleanup_proposer_files,
     _compute_score,
     _count_harness_files,
+    _default_run_id,
     _extract_failure_patterns,
     _link_traces_to_candidate,
+    _load_or_create_task_splits,
     optimize,
 )
 from adk_meta_harness.splits import split_task_names
@@ -389,3 +392,34 @@ async def test_optimize_resume_uses_run_artifacts_without_rerunning_eval(monkeyp
     assert fake_runner.calls == []
     assert resumed.iterations_completed == 1
     assert resumed.best_test == 1.0
+
+
+def test_default_run_id_includes_suffix_and_is_unique():
+    first = _default_run_id()
+    second = _default_run_id()
+
+    assert first != second
+    assert re.match(r"^\d{8}-\d{6}-[0-9a-f]{8}$", first)
+    assert re.match(r"^\d{8}-\d{6}-[0-9a-f]{8}$", second)
+
+
+def test_load_or_create_task_splits_rejects_dataset_mismatch(tmp_path):
+    run_dir = tmp_path / "runs" / "same-run"
+    run_dir.mkdir(parents=True)
+
+    _load_or_create_task_splits(
+        run_dir=run_dir,
+        task_names=["task-a", "task-b"],
+        holdout_ratio=0.3,
+        test_ratio=0.2,
+        split_seed=42,
+    )
+
+    with pytest.raises(ValueError, match="does not match current dataset"):
+        _load_or_create_task_splits(
+            run_dir=run_dir,
+            task_names=["task-a", "task-c"],
+            holdout_ratio=0.3,
+            test_ratio=0.2,
+            split_seed=42,
+        )
