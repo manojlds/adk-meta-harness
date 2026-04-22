@@ -516,6 +516,7 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
             {
                 "iteration": iterations_completed,
                 "status": "final_test",
+                "task_set": "test",
                 "version": best_candidate.version,
                 "candidate_path": str(best_candidate.path.resolve()),
                 "test_score": best_test,
