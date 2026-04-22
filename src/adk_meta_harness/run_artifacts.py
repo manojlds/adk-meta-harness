@@ -1,7 +1,14 @@
+"""Run-scoped artifact management for optimization runs.
+
+Provides directory layout creation, frontier/evolution persistence,
+pending-eval tracking, and helpers for resumable outer-loop execution.
+"""
+
 from __future__ import annotations
 
 import json
 import re
+import shutil
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -41,6 +48,23 @@ def init_run_artifacts(root_dir: Path, run_id: str) -> RunArtifacts:
         frontier_path=run_dir / "frontier_val.json",
         evolution_summary_path=run_dir / "evolution_summary.jsonl",
     )
+
+
+def reset_run_state(artifacts: RunArtifacts) -> None:
+    """Clear mutable run state so a run can start fresh."""
+    for path in (
+        artifacts.frontier_path,
+        artifacts.pending_eval_path,
+        artifacts.evolution_summary_path,
+    ):
+        path.unlink(missing_ok=True)
+
+    if artifacts.candidates_dir.exists():
+        for entry in artifacts.candidates_dir.iterdir():
+            if entry.is_dir():
+                shutil.rmtree(entry, ignore_errors=True)
+            else:
+                entry.unlink(missing_ok=True)
 
 
 def write_pending_eval(artifacts: RunArtifacts, payload: dict[str, Any]) -> None:

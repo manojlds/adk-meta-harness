@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from adk_meta_harness.cli import main
 from adk_meta_harness.task_executor import EvalOutput, EvalResult
 
@@ -115,3 +117,59 @@ def test_eval_temporal_uses_local_eval_and_prints_note(monkeypatch, tmp_path, ca
 
     out = capsys.readouterr().out
     assert "eval with --runner temporal currently executes locally" in out
+
+
+def test_optimize_rejects_invalid_ratio_combination(monkeypatch, tmp_path, capsys):
+    dataset = tmp_path / "tasks"
+    harness = tmp_path / "harness"
+    dataset.mkdir()
+    harness.mkdir()
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "amh",
+            "optimize",
+            "--dataset",
+            str(dataset),
+            "--initial-harness",
+            str(harness),
+            "--holdout-ratio",
+            "0.8",
+            "--test-ratio",
+            "0.3",
+        ],
+    )
+
+    with pytest.raises(SystemExit):
+        main()
+
+    err = capsys.readouterr().err
+    assert "must be < 1.0" in err
+
+
+def test_optimize_rejects_invalid_run_id(monkeypatch, tmp_path, capsys):
+    dataset = tmp_path / "tasks"
+    harness = tmp_path / "harness"
+    dataset.mkdir()
+    harness.mkdir()
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "amh",
+            "optimize",
+            "--dataset",
+            str(dataset),
+            "--initial-harness",
+            str(harness),
+            "--run-id",
+            "../bad",
+        ],
+    )
+
+    with pytest.raises(SystemExit):
+        main()
+
+    err = capsys.readouterr().err
+    assert "Invalid --run-id" in err

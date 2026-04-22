@@ -11,6 +11,7 @@ from adk_meta_harness.run_artifacts import (
     load_frontier,
     max_completed_iteration,
     read_evolution_rows,
+    reset_run_state,
     update_frontier,
     write_pending_eval,
 )
@@ -73,3 +74,21 @@ def test_frontier_pending_and_evolution_roundtrip(tmp_path):
 def test_init_run_artifacts_rejects_unsafe_run_id(tmp_path):
     with pytest.raises(ValueError, match="Invalid run_id"):
         init_run_artifacts(tmp_path / "candidates", "../../etc")
+
+
+def test_reset_run_state_clears_mutable_artifacts_and_candidates(tmp_path):
+    artifacts = init_run_artifacts(tmp_path / "candidates", "run-3")
+
+    write_pending_eval(artifacts, {"iteration": 1})
+    update_frontier(artifacts, {"iterations_completed": 1, "best": {"version": 1}})
+    append_evolution_row(artifacts, {"iteration": 1, "status": "kept", "version": 1})
+    candidate_dir = artifacts.candidates_dir / "v0001"
+    candidate_dir.mkdir(parents=True)
+    (candidate_dir / "meta.json").write_text("{}")
+
+    reset_run_state(artifacts)
+
+    assert not artifacts.pending_eval_path.exists()
+    assert not artifacts.frontier_path.exists()
+    assert not artifacts.evolution_summary_path.exists()
+    assert list(artifacts.candidates_dir.iterdir()) == []

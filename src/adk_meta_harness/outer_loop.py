@@ -36,6 +36,7 @@ from adk_meta_harness.run_artifacts import (
     load_frontier,
     max_completed_iteration,
     read_evolution_rows,
+    reset_run_state,
     update_frontier,
     write_pending_eval,
 )
@@ -147,6 +148,9 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
                     )
 
     if not resumed:
+        reset_run_state(artifacts)
+        best_test = None
+
         # Fresh run — initialize baseline candidate
         baseline = init_candidates_dir(artifacts.candidates_dir, config.initial_harness)
         print(f"[v{baseline.version}] Baseline harness initialized")
