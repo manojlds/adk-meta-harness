@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from adk_meta_harness.run_artifacts import (
     append_evolution_row,
     completed_iterations,
@@ -66,3 +68,8 @@ def test_frontier_pending_and_evolution_roundtrip(tmp_path):
     assert rows[0]["status"] == "baseline"
     assert completed_iterations(rows) == 1
     assert latest_final_test_score(rows) == 0.75
+
+
+def test_init_run_artifacts_rejects_unsafe_run_id(tmp_path):
+    with pytest.raises(ValueError, match="Invalid run_id"):
+        init_run_artifacts(tmp_path / "candidates", "../../etc")

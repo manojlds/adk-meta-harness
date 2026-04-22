@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 from adk_meta_harness.candidate import (
     Candidate,
@@ -447,6 +448,8 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
     )
     if should_run_final_test:
         print(f"\n=== Final test evaluation ({len(task_splits.test_task_names)} tasks) ===")
+        # evaluate() has search/holdout slots only. We pass test tasks through
+        # search_task_names here and interpret the resulting search score as test score.
         final_output = await task_runner.evaluate(
             candidate_dir=best_candidate.path,
             tasks_dir=config.dataset,
@@ -497,7 +500,8 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
 
 
 def _default_run_id() -> str:
-    return datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    return f"{ts}-{uuid4().hex[:8]}"
 
 
 def _load_or_create_task_splits(
@@ -509,21 +513,31 @@ def _load_or_create_task_splits(
     split_seed: int,
 ) -> TaskSplits:
     manifest_path = run_dir / "task_splits.json"
+    normalized_task_names = sorted({name for name in task_names if name})
+
     if manifest_path.exists():
         payload = json.loads(manifest_path.read_text())
         splits_payload = payload.get("splits", payload)
+        cached_task_names = payload.get("task_names", []) if isinstance(payload, dict) else []
+        cached_task_names_set = sorted({str(name) for name in cached_task_names if name})
+        if cached_task_names_set and cached_task_names_set != normalized_task_names:
+            msg = (
+                "Existing task_splits.json does not match current dataset task names. "
+                "Use a new run_id for changed task sets."
+            )
+            raise ValueError(msg)
         return TaskSplits.from_dict(splits_payload)
 
     splits = split_task_names(
-        task_names,
+        normalized_task_names,
         holdout_ratio=holdout_ratio,
         test_ratio=test_ratio,
         seed=split_seed,
     )
     manifest = {
         "created_at": datetime.now(UTC).isoformat(),
-        "task_count": len(task_names),
-        "task_names": sorted(set(task_names)),
+        "task_count": len(normalized_task_names),
+        "task_names": normalized_task_names,
         "splits": splits.to_dict(),
     }
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True))
