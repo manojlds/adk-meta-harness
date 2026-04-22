@@ -125,7 +125,7 @@ class TemporalOptimizeOutput:
             best_test=_optional_float(payload.get("best_test")),
             iterations_completed=int(payload["iterations_completed"]),
             candidates_dir=str(payload["candidates_dir"]),
-            run_id=str(payload.get("run_id", "")),
+            run_id=str(payload["run_id"]),
         )
 
 

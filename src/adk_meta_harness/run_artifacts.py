@@ -78,6 +78,11 @@ def write_pending_eval(artifacts: RunArtifacts, payload: dict[str, Any]) -> None
     artifacts.pending_eval_path.write_text(json.dumps(enriched, indent=2, sort_keys=True))
 
 
+def clear_pending_eval(artifacts: RunArtifacts) -> None:
+    """Clear any stale pending-evaluation marker for the run."""
+    artifacts.pending_eval_path.unlink(missing_ok=True)
+
+
 def update_frontier(artifacts: RunArtifacts, payload: dict[str, Any]) -> None:
     enriched = {
         "run_id": artifacts.run_id,

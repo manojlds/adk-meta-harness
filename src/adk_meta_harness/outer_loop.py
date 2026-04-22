@@ -32,6 +32,7 @@ from adk_meta_harness.learnings import Learnings
 from adk_meta_harness.proposer import get_proposer
 from adk_meta_harness.run_artifacts import (
     append_evolution_row,
+    clear_pending_eval,
     init_run_artifacts,
     latest_final_test_score,
     load_frontier,
@@ -127,11 +128,18 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
     all_results = _results_from_evolution_rows(rows)
     iterations_completed = max_completed_iteration(rows)
     start_iteration = iterations_completed + 1
-    best_test: float | None = latest_final_test_score(rows)
     best_candidate_changed = False
 
     frontier_exists = artifacts.frontier_path.exists()
     frontier = load_frontier(artifacts)
+    best_test: float | None = latest_final_test_score(rows)
+    if best_test is None and frontier is not None:
+        try:
+            frontier_best_test = frontier.get("best_test")
+            if frontier_best_test is not None:
+                best_test = float(frontier_best_test)
+        except (TypeError, ValueError):
+            pass
     resumed = False
     frontier_invalid_reason: str | None = None
     if frontier:
@@ -357,6 +365,7 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
                 }
             )
             iterations_completed = iteration
+            clear_pending_eval(artifacts)
             continue
         if validation.warnings:
             for warn in validation.warnings:
@@ -467,6 +476,7 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
 
         all_results.append(proposed_score)
         iterations_completed = iteration
+        clear_pending_eval(artifacts)
 
     should_run_final_test = bool(task_splits.test_task_names) and (
         best_test is None or best_candidate_changed
