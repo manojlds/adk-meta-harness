@@ -394,6 +394,91 @@ async def test_optimize_resume_uses_run_artifacts_without_rerunning_eval(monkeyp
     assert resumed.best_test == 1.0
 
 
+@pytest.mark.asyncio
+async def test_optimize_resume_survives_moved_candidates_root(monkeypatch, tmp_path):
+    dataset = tmp_path / "tasks"
+    dataset.mkdir()
+    for i in range(6):
+        task_dir = dataset / f"task-{i:02d}"
+        task_dir.mkdir()
+        (task_dir / "instruction.md").write_text("Do task")
+
+    initial_harness = tmp_path / "initial_harness"
+    initial_harness.mkdir()
+    (initial_harness / "agent.py").write_text("agent = object()\nroot_agent = agent\n")
+    (initial_harness / "system_prompt.md").write_text("You are an agent")
+    (initial_harness / "config.yaml").write_text("model: gemini-2.5-flash\n")
+
+    class FakeRunner:
+        def __init__(self):
+            self.calls: list[dict] = []
+
+        async def evaluate(self, **kwargs):
+            self.calls.append(kwargs)
+            search_names = kwargs.get("search_task_names") or []
+            holdout_names = kwargs.get("holdout_task_names") or []
+            return EvalOutput(
+                search_results=[
+                    EvalResult(task_name=name, passed=True, score=1.0) for name in search_names
+                ],
+                holdout_results=[
+                    EvalResult(task_name=name, passed=True, score=1.0) for name in holdout_names
+                ],
+            )
+
+    class FakeProposer:
+        name = "fake"
+
+        async def propose_edit(self, **kwargs):
+            return {
+                "description": "no-op",
+                "change_type": "harness",
+            }
+
+    fake_runner = FakeRunner()
+    monkeypatch.setattr("adk_meta_harness.runner.get_runner", lambda *_a, **_k: fake_runner)
+    monkeypatch.setattr(
+        "adk_meta_harness.outer_loop.get_proposer", lambda *_a, **_k: FakeProposer()
+    )
+    monkeypatch.setattr(
+        "adk_meta_harness.outer_loop.validate_candidate",
+        lambda *_a, **_k: ValidationResult(valid=True),
+    )
+
+    original_candidates = tmp_path / "candidates"
+    await optimize(
+        OptimizeConfig(
+            dataset=dataset,
+            initial_harness=initial_harness,
+            proposer="opencode",
+            model="gemini-2.5-flash",
+            iterations=1,
+            candidates_dir=original_candidates,
+            run_id="moved-root",
+        )
+    )
+    assert len(fake_runner.calls) == 3
+
+    relocated_candidates = tmp_path / "relocated-candidates"
+    original_candidates.rename(relocated_candidates)
+
+    fake_runner.calls.clear()
+    resumed = await optimize(
+        OptimizeConfig(
+            dataset=dataset,
+            initial_harness=initial_harness,
+            proposer="opencode",
+            model="gemini-2.5-flash",
+            iterations=1,
+            candidates_dir=relocated_candidates,
+            run_id="moved-root",
+        )
+    )
+
+    assert fake_runner.calls == []
+    assert resumed.iterations_completed == 1
+
+
 def test_default_run_id_includes_suffix_and_is_unique():
     first = _default_run_id()
     second = _default_run_id()

@@ -83,6 +83,7 @@ def test_reset_run_state_clears_mutable_artifacts_and_candidates(tmp_path):
     write_pending_eval(artifacts, {"iteration": 1})
     update_frontier(artifacts, {"iterations_completed": 1, "best": {"version": 1}})
     append_evolution_row(artifacts, {"iteration": 1, "status": "kept", "version": 1})
+    artifacts.learnings_path.write_text("stale")
     candidate_dir = artifacts.candidates_dir / "v0001"
     candidate_dir.mkdir(parents=True)
     (candidate_dir / "meta.json").write_text("{}")
@@ -92,6 +93,7 @@ def test_reset_run_state_clears_mutable_artifacts_and_candidates(tmp_path):
     assert not artifacts.pending_eval_path.exists()
     assert not artifacts.frontier_path.exists()
     assert not artifacts.evolution_summary_path.exists()
+    assert not artifacts.learnings_path.exists()
     assert list(artifacts.candidates_dir.iterdir()) == []
 
 

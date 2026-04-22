@@ -24,6 +24,7 @@ class RunArtifacts:
     root_dir: Path
     run_dir: Path
     candidates_dir: Path
+    learnings_path: Path
     task_splits_path: Path
     pending_eval_path: Path
     frontier_path: Path
@@ -43,6 +44,7 @@ def init_run_artifacts(root_dir: Path, run_id: str) -> RunArtifacts:
         root_dir=root_dir,
         run_dir=run_dir,
         candidates_dir=candidates_dir,
+        learnings_path=run_dir / "learnings.md",
         task_splits_path=run_dir / "task_splits.json",
         pending_eval_path=run_dir / "pending_eval.json",
         frontier_path=run_dir / "frontier_val.json",
@@ -56,6 +58,7 @@ def reset_run_state(artifacts: RunArtifacts) -> None:
         artifacts.frontier_path,
         artifacts.pending_eval_path,
         artifacts.evolution_summary_path,
+        artifacts.learnings_path,
     ):
         path.unlink(missing_ok=True)
 
