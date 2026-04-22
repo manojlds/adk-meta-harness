@@ -466,3 +466,41 @@ def test_load_or_create_task_splits_rejects_empty_cached_task_names(tmp_path):
             test_ratio=0.2,
             split_seed=42,
         )
+
+
+@pytest.mark.asyncio
+async def test_optimize_refuses_reset_when_frontier_invalid_with_existing_state(
+    monkeypatch,
+    tmp_path,
+):
+    dataset = tmp_path / "tasks"
+    dataset.mkdir()
+    task_dir = dataset / "task-01"
+    task_dir.mkdir()
+    (task_dir / "instruction.md").write_text("Do task")
+
+    initial_harness = tmp_path / "initial_harness"
+    initial_harness.mkdir()
+    (initial_harness / "agent.py").write_text("agent = object()\nroot_agent = agent\n")
+    (initial_harness / "system_prompt.md").write_text("You are an agent")
+    (initial_harness / "config.yaml").write_text("model: gemini-2.5-flash\n")
+
+    run_dir = tmp_path / "candidates" / "runs" / "bad-frontier"
+    run_dir.mkdir(parents=True)
+    (run_dir / "evolution_summary.jsonl").write_text('{"iteration":1,"status":"kept"}\n')
+    (run_dir / "frontier_val.json").write_text("{not-json")
+
+    monkeypatch.setattr("adk_meta_harness.runner.get_runner", lambda *_a, **_k: object())
+    monkeypatch.setattr("adk_meta_harness.outer_loop.get_proposer", lambda *_a, **_k: object())
+
+    with pytest.raises(ValueError, match="Refusing to reset automatically"):
+        await optimize(
+            OptimizeConfig(
+                dataset=dataset,
+                initial_harness=initial_harness,
+                proposer="opencode",
+                iterations=1,
+                candidates_dir=tmp_path / "candidates",
+                run_id="bad-frontier",
+            )
+        )

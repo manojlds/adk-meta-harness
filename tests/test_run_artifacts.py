@@ -92,3 +92,10 @@ def test_reset_run_state_clears_mutable_artifacts_and_candidates(tmp_path):
     assert not artifacts.frontier_path.exists()
     assert not artifacts.evolution_summary_path.exists()
     assert list(artifacts.candidates_dir.iterdir()) == []
+
+
+def test_load_frontier_returns_none_for_corrupt_json(tmp_path):
+    artifacts = init_run_artifacts(tmp_path / "candidates", "run-4")
+    artifacts.frontier_path.write_text("{not-json")
+
+    assert load_frontier(artifacts) is None

@@ -173,3 +173,30 @@ def test_optimize_rejects_invalid_run_id(monkeypatch, tmp_path, capsys):
 
     err = capsys.readouterr().err
     assert "Invalid --run-id" in err
+
+
+def test_optimize_rejects_negative_ratio(monkeypatch, tmp_path, capsys):
+    dataset = tmp_path / "tasks"
+    harness = tmp_path / "harness"
+    dataset.mkdir()
+    harness.mkdir()
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "amh",
+            "optimize",
+            "--dataset",
+            str(dataset),
+            "--initial-harness",
+            str(harness),
+            "--test-ratio",
+            "-0.1",
+        ],
+    )
+
+    with pytest.raises(SystemExit):
+        main()
+
+    err = capsys.readouterr().err
+    assert "must be non-negative" in err
