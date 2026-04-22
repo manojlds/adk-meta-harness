@@ -111,7 +111,7 @@ def _validate_ratios(holdout_ratio: float, test_ratio: float) -> None:
 
 
 def _ratio_count(total: int, ratio: float) -> int:
-    return round(total * ratio)
+    return int(total * ratio + 0.5)
 
 
 def _to_str_list(value: Any) -> list[str]:

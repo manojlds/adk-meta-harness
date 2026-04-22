@@ -46,3 +46,12 @@ def test_split_task_names_rejects_invalid_ratios():
 
     with pytest.raises(ValueError, match=r"must be < 1\.0"):
         split_task_names(["a", "b"], holdout_ratio=0.7, test_ratio=0.3, seed=1)
+
+
+def test_split_task_names_uses_conventional_half_up_rounding():
+    tasks = [f"task-{i}" for i in range(5)]
+    splits = split_task_names(tasks, holdout_ratio=0.5, test_ratio=0.0, seed=1)
+
+    # 5 * 0.5 == 2.5, expect 3 holdout with half-up rounding.
+    assert len(splits.holdout_task_names) == 3
+    assert len(splits.search_task_names) == 2

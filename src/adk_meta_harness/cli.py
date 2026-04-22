@@ -118,7 +118,10 @@ def main() -> None:
     opt.add_argument(
         "--run-id",
         default=None,
-        help="Optional run ID for writing split artifacts under candidates/runs/<run-id>",
+        help=(
+            "Optional run ID for writing split artifacts under candidates/runs/<run-id>. "
+            "Must match [A-Za-z0-9._-]."
+        ),
     )
     opt.add_argument(
         "--candidates-dir",
