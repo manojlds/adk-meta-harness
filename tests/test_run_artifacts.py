@@ -95,6 +95,24 @@ def test_reset_run_state_clears_mutable_artifacts_and_candidates(tmp_path):
     assert list(artifacts.candidates_dir.iterdir()) == []
 
 
+def test_reset_run_state_unlinks_symlink_without_touching_target(tmp_path):
+    artifacts = init_run_artifacts(tmp_path / "candidates", "run-3-symlink")
+
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    outside_file = outside_dir / "keep.txt"
+    outside_file.write_text("keep")
+
+    link_path = artifacts.candidates_dir / "outside-link"
+    link_path.symlink_to(outside_dir, target_is_directory=True)
+
+    reset_run_state(artifacts)
+
+    assert outside_dir.exists()
+    assert outside_file.read_text() == "keep"
+    assert not link_path.exists()
+
+
 def test_load_frontier_returns_none_for_corrupt_json(tmp_path):
     artifacts = init_run_artifacts(tmp_path / "candidates", "run-4")
     artifacts.frontier_path.write_text("{not-json")

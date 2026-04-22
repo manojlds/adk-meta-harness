@@ -61,8 +61,10 @@ def reset_run_state(artifacts: RunArtifacts) -> None:
 
     if artifacts.candidates_dir.exists():
         for entry in artifacts.candidates_dir.iterdir():
-            if entry.is_dir():
-                shutil.rmtree(entry, ignore_errors=True)
+            if entry.is_symlink():
+                entry.unlink()
+            elif entry.is_dir():
+                shutil.rmtree(entry)
             else:
                 entry.unlink(missing_ok=True)
 
