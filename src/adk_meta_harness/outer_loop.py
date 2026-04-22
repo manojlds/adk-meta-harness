@@ -121,7 +121,7 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
 
     task_runner = get_runner(config.runner, **(config.runner_kwargs or {}))
     proposer = get_proposer(config.proposer, model=config.proposer_model)
-    learnings = Learnings(artifacts.run_dir / "learnings.md")
+    learnings = Learnings(artifacts.learnings_path)
 
     existing = discover_candidates(artifacts.candidates_dir)
     rows = read_evolution_rows(artifacts)
@@ -146,8 +146,18 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
         best_payload = frontier.get("best")
         if isinstance(best_payload, dict):
             candidate_path = best_payload.get("candidate_path")
-            if candidate_path:
-                best_path = Path(str(candidate_path))
+            candidate_relpath = best_payload.get("candidate_relpath")
+            best_path: Path | None = None
+            if candidate_relpath:
+                best_path = artifacts.run_dir / str(candidate_relpath)
+            elif candidate_path:
+                candidate_path_value = Path(str(candidate_path))
+                if candidate_path_value.is_absolute():
+                    best_path = candidate_path_value
+                else:
+                    best_path = artifacts.run_dir / candidate_path_value
+
+            if best_path is not None:
                 if (best_path / "meta.json").exists():
                     best_candidate = Candidate.load_meta(best_path)
                     best_holdout = float(best_payload.get("holdout_score", 0.0))
@@ -162,7 +172,9 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
                         "frontier candidate_path does not contain a valid meta.json"
                     )
             else:
-                frontier_invalid_reason = "frontier is missing best.candidate_path"
+                frontier_invalid_reason = (
+                    "frontier is missing best.candidate_path/best.candidate_relpath"
+                )
         else:
             frontier_invalid_reason = "frontier is missing a valid best payload"
     elif frontier_exists:
@@ -178,6 +190,7 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
 
     if not resumed:
         reset_run_state(artifacts)
+        learnings = Learnings(artifacts.learnings_path)
         best_test = None
 
         # Fresh run — initialize baseline candidate
@@ -256,6 +269,7 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
                 best_search=best_search,
                 best_test=best_test,
                 iterations_completed=iterations_completed,
+                run_dir=artifacts.run_dir,
             ),
         )
 
@@ -467,6 +481,7 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
                     best_search=best_search,
                     best_test=best_test,
                     iterations_completed=iteration,
+                    run_dir=artifacts.run_dir,
                 ),
             )
         else:
@@ -518,6 +533,7 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
             best_search=best_search,
             best_test=best_test,
             iterations_completed=iterations_completed,
+            run_dir=artifacts.run_dir,
         ),
     )
 
@@ -639,14 +655,22 @@ def _frontier_payload(
     best_search: float,
     best_test: float | None,
     iterations_completed: int,
+    run_dir: Path,
 ) -> dict:
     """Serialize current frontier state for run-level persistence."""
+    candidate_relpath: str | None = None
+    try:
+        candidate_relpath = str(best_candidate.path.resolve().relative_to(run_dir.resolve()))
+    except ValueError:
+        candidate_relpath = None
+
     return {
         "iterations_completed": iterations_completed,
         "best_test": best_test,
         "best": {
             "version": best_candidate.version,
             "candidate_path": str(best_candidate.path.resolve()),
+            "candidate_relpath": candidate_relpath,
             "holdout_score": best_holdout,
             "search_score": best_search,
         },
