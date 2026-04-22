@@ -671,7 +671,12 @@ def _compute_score(search_results: list, holdout_results: list) -> dict:
 
 
 def _compute_test_score(test_results: list) -> float:
-    """Compute score for final test-only evaluation results."""
+    """Compute score for final test-only evaluation results.
+
+    ``TaskRunner.evaluate()`` currently exposes search/holdout slots only,
+    so test tasks are routed through ``search_results`` and this reads the
+    derived ``search`` key from ``_compute_score()``.
+    """
     return _compute_score(test_results, [])["search"]
 
 
