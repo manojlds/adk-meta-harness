@@ -88,7 +88,10 @@ def update_frontier(artifacts: RunArtifacts, payload: dict[str, Any]) -> None:
 def load_frontier(artifacts: RunArtifacts) -> dict[str, Any] | None:
     if not artifacts.frontier_path.exists():
         return None
-    data = json.loads(artifacts.frontier_path.read_text())
+    try:
+        data = json.loads(artifacts.frontier_path.read_text())
+    except json.JSONDecodeError:
+        return None
     if not isinstance(data, dict):
         return None
     return data

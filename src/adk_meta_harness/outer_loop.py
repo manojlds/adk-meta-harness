@@ -129,8 +129,10 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
     best_test: float | None = latest_final_test_score(rows)
     best_candidate_changed = False
 
+    frontier_exists = artifacts.frontier_path.exists()
     frontier = load_frontier(artifacts)
     resumed = False
+    frontier_invalid_reason: str | None = None
     if frontier:
         best_payload = frontier.get("best")
         if isinstance(best_payload, dict):
@@ -146,6 +148,24 @@ async def optimize(config: OptimizeConfig) -> OptimizeResult:
                         f"Resuming run {run_id} at iteration {start_iteration} "
                         f"(best v{best_candidate.version}, holdout={best_holdout:.4f})"
                     )
+                else:
+                    frontier_invalid_reason = (
+                        "frontier candidate_path does not contain a valid meta.json"
+                    )
+            else:
+                frontier_invalid_reason = "frontier is missing best.candidate_path"
+        else:
+            frontier_invalid_reason = "frontier is missing a valid best payload"
+    elif frontier_exists:
+        frontier_invalid_reason = "frontier file is unreadable or malformed"
+
+    if frontier_invalid_reason and (existing or rows):
+        msg = (
+            f"Run {run_id} has existing artifacts but cannot resume: {frontier_invalid_reason}. "
+            "Refusing to reset automatically; use a new --run-id "
+            "or repair/remove frontier_val.json."
+        )
+        raise ValueError(msg)
 
     if not resumed:
         reset_run_state(artifacts)

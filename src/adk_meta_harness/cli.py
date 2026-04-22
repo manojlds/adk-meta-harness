@@ -204,6 +204,10 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "optimize":
+        if args.holdout_ratio < 0.0 or args.test_ratio < 0.0:
+            parser.error("--holdout-ratio and --test-ratio must be non-negative")
+        if args.holdout_ratio >= 1.0 or args.test_ratio >= 1.0:
+            parser.error("--holdout-ratio and --test-ratio must each be < 1.0")
         if args.holdout_ratio + args.test_ratio >= 1.0:
             parser.error("--holdout-ratio + --test-ratio must be < 1.0")
         if args.run_id is not None and not RUN_ID_PATTERN.fullmatch(args.run_id):
